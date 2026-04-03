@@ -1,0 +1,12 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: flexa-sc-zfs
+provisioner: csi.flexa.com
+parameters:
+  proxyProfile: "zfs"
+  fs: "zfs"
+  poolName: "kubernetes"
+  protocol: "nfs"
+reclaimPolicy: Delete
+allowVolumeExpansion: true

@@ -1,0 +1,23 @@
+# -*- mode: yaml -*-
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: flexa-nfs-lustre
+  annotations:
+    flexa.io/mountOptions: "vers=4,rw,async,timeo=666"
+  labels:
+    app: flexa-nfs-lustre
+spec:
+  containers:
+  - name: flexa-nfs-lustre
+    image: busybox
+    command: [ "sleep", "360000"]
+    volumeMounts:
+    - mountPath: "/mnt/pv"
+      name: nfs-vol
+  volumes:
+  - name: nfs-vol
+    persistentVolumeClaim:
+      claimName: flexa-pvc-lustre
+

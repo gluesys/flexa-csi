@@ -1,0 +1,9 @@
+profiles:
+  zfs:
+    proxyIP: 192.168.7.178
+    proxyPort: 9001
+    mountIP: "100.100.0.0/18"
+  lustre:
+    proxyIP: 192.168.33.53
+    proxyPort: 9001
+    mountIP: "100.100.0.0/18"
