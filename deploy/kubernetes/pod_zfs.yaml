@@ -1,0 +1,23 @@
+# -*- mode: yaml -*-
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: flexa-nfs-zfs
+  annotations:
+    flexa.io/mountOptions: "vers=4,ro,async,timeo=666"
+  labels:
+    app: flexa-nfs-zfs
+spec:
+  containers:
+  - name: flexa-nfs-zfs
+    image: busybox
+    command: [ "sleep", "360000"]
+    volumeMounts:
+    - mountPath: "/mnt/pv"
+      name: nfs-vol
+  volumes:
+  - name: nfs-vol
+    persistentVolumeClaim:
+      claimName: flexa-pvc-zfs
+

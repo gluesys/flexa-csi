@@ -1,0 +1,20 @@
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: flexa-pvc-lustre 
+  annotations:
+    flexa.io/optionISS: "on"
+    flexa.io/optionSVS: "on"
+    flexa.io/optionComp: "off"
+    flexa.io/secureAddress: "100.100.0.0"
+    flexa.io/secureSubnet: "255.255.192.0"
+    flexa.io/nfsAccess: "RW"
+    flexa.io/nfsNoRootSquashing: "on"
+    flexa.io/nfsInsecure: "on"
+spec:
+  storageClassName: flexa-sc-lustre
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 2G
