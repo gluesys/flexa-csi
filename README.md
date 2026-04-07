@@ -3,76 +3,86 @@
 The official [Container Storage Interface](https://github.com/container-storage-interface) driver for FlexA Storage.
 
 ### Container Images & Kubernetes Compatibility
-Driver Name: csi.flexa.com
 
-| Driver Version                                                                   | Image                                                                     | Supported K8s Version |
-| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | --------------------- |
-| [1.0.0](https://github.com/gluesys/flexa-csi)                                    | `ghcr.io/gluesys/flexa-csi:1.0.0`                                         | 1.21+                 |
+Driver Name: `csi.flexa.com`
+
+| Driver Version | Image | Supported K8s Version |
+| -------------- | ----- | --------------------- |
+| [1.0.0](https://github.com/gluesys/flexa-csi) | `ghcr.io/gluesys/flexa-csi:1.0.0` | 1.21+ |
 
 The FlexA CSI driver supports:
 
 - **Access modes (CSI):** `SINGLE_NODE_WRITER`, `MULTI_NODE_MULTI_WRITER` (typical Kubernetes mapping: RWO and RWX-style multi-writer NFS where applicable).
 - **Controller:** Create/Delete volume, List volumes, Get capacity.
-- **Node:** Stage/Unstage (no-op for current NFS flow), Publish/Unpublish, Get volume stats.
+- **Node:** Stage/Unstage (no-op for the current NFS flow), Publish/Unpublish, Get volume stats.
 
 **Not supported at this time:** volume expansion (controller and node return not supported), snapshots, cloning.
 
+## Prerequisites
+
+- Kubernetes 1.21 or above
+- FlexA Storage (e.g. 1.4.0 ZFS) with at least one storage pool for ZFS-backed volumes, or Lustre cluster configuration as required by your deployment
+- Go 1.21+ recommended when building from source
+
+### Before you install
+
+1. For ZFS workflows, create and initialize at least one **storage pool** on FlexA Storage.
+2. Deploy the driver using **Helm** (recommended) or **raw manifests** (`deploy/kubernetes`) as described in [Installation](#installation).
+
 ## Installation
 
-### Prerequisites
+From the repository root (directory that contains `charts/` and `config/`).
 
-- Kubernetes versions 1.21 or above
-- FlexA Storage (e.g. 1.4.0 ZFS) with at least one storage pool (for ZFS-backed volumes) or Lustre cluster configuration as required by your deployment
-- Go version 1.21 or above is recommended for building from source
+### Helm (recommended)
 
-### Notice
+Chart: [`charts/flexa-csi`](charts/flexa-csi).
 
-1. Before installing the CSI driver, make sure you have created and initialized at least one **storage pool** on your FlexA Storage (for ZFS workflows).
-2. After you complete the steps below, deploy the CSI driver using the install script.
+Minimal install (uses [`charts/flexa-csi/values.yaml`](charts/flexa-csi/values.yaml) for `clientInfo.content` and other defaults):
 
-### Procedure
+```bash
+helm upgrade --install flexa-csi ./charts/flexa-csi \
+  --namespace flexa-csi
+```
 
-1. Clone the git repository. `git clone https://github.com/gluesys/flexa-csi.git`
-2. Enter the directory. `cd flexa-csi`
-3. Copy the client-info template. `cp config/client-info-template.yml config/client-info.yml`
-4. Edit `config/client-info.yml` to configure the FlexA CSI Proxy and VIP resolve behavior.
+Create the namespace first if it does not exist (`kubectl create namespace flexa-csi`), or add **`--create-namespace`** to the `helm` line so Helm creates it. The chart itself does not install a `Namespace` resource.
 
-   - **Legacy default (optional):** If you omit `profiles` entirely, you can set a single default endpoint:
-     - *host*: IPv4 address of the FlexA CSI Proxy.
-     - *port*: TCP port for the proxy (commonly 9001).
-     - *mountIP*: (Optional) Reference address used when resolving the NFS VIP (for example a CIDR string such as `192.168.0.0/18`). The proxy uses this value in VIP resolve requests so that, after storage fail-over, mounts still target the correct service address. If *mountIP* is empty, VIP resolve falls back to the proxy *host* only.
-   - **Profiles (recommended):** Define named endpoints under `profiles`:
-     - Each profile must set *proxyIP* and *proxyPort*.
-     - *mountIP* is optional per profile with the same semantics as above (VIP resolve reference).
-     - Select a profile per StorageClass with the `proxyProfile` parameter (see below).
+- **Proxy / VIP config:** Edit `clientInfo.content` in `values.yaml`, or use `-f my-values.yaml`, or `--set-file clientInfo.content=/absolute/path/to/client-info.yml` (paths are relative to your shell cwd). You do not need a separate `config/client-info.yml` unless you choose the file-based workflow.
+- **Secret managed by chart:** With `clientInfo.create: true` (default), the chart creates the Secret from `clientInfo.content`. To use a Secret you created yourself: `kubectl create secret ...` then install with `--set clientInfo.create=false` (Secret name must match `clientInfo.secretName`, default `client-info-secret`).
+- **Optional:** Tune `image`, `sidecars`, host paths, and **`storageClass`** entries under `values.yaml` ([`templates/storageclass.yaml`](charts/flexa-csi/templates/storageclass.yaml) renders enabled entries). Run `helm lint ./charts/flexa-csi` before applying.
 
-5. Install using YAML from the `deploy/kubernetes` directory (the script uses local manifest paths):
+### Raw manifests
+
+1. `git clone https://github.com/gluesys/flexa-csi.git` and `cd flexa-csi`
+2. `cp config/client-info-template.yml config/client-info.yml` and edit `config/client-info.yml` (proxy endpoints and optional `mountIP`; see [client-info / Secret](#client-info--secret) and [StorageClass parameters](#creating-storage-classes)).
+3. Create the `client-info` Secret in the driver namespace (see [Creating the Secret manually](#creating-the-secret-manually)).
+4. Install:
 
    ```bash
    cd deploy/kubernetes
    sh install.sh
    ```
 
-6. Verify all CSI driver pods are Running: `kubectl get pods -n flexa-csi`
+5. Verify: `kubectl get pods -n flexa-csi`
 
 ## CSI Driver Configuration
 
-You need a Secret (client-info) and StorageClasses. Volume snapshots are **not** implemented in this driver yet; do not rely on `VolumeSnapshotClass` for FlexA volumes until support is added.
+You need a **Secret** (`client-info.yml`) and **StorageClasses**. Volume snapshots are **not** implemented; do not rely on `VolumeSnapshotClass` until support exists.
 
-This section covers:
+Contents: [client-info / Secret](#client-info--secret) · [StorageClasses](#creating-storage-classes) · [PVC annotations](#pvc-annotations) · [Pod annotations](#pod-annotations) · [VolumeContext](#volumecontext-advanced)
 
-1. Creating the storage system secret (often created by the install flow from `config/client-info.yml`)
-2. Configuring StorageClasses
-3. PVC annotations (volume creation options)
-4. Pod annotations (mount behavior)
+### client-info / Secret
 
-### Creating a Secret
+**Helm:** Configure proxy endpoints in `charts/flexa-csi/values.yaml` (`clientInfo.content`) or use `-f` / `--set-file` as described in [Installation](#installation).
 
-Create a Secret that holds `client-info.yml`. The install scripts usually create this from your config; to create or recreate it manually:
+**Raw manifests:** Prepare `config/client-info.yml` with either a legacy `host`/`port` default and/or `profiles` (`proxyIP`, `proxyPort`, optional `mountIP` for VIP resolve). See the template at [`config/client-info-template.yml`](config/client-info-template.yml).
 
-1. Edit `config/client-info.yml`, for example:
+#### Creating the Secret manually
 
-   ```
+Use when not using Helm, or when you pre-create the Secret for Helm (`clientInfo.create=false`):
+
+1. Example `config/client-info.yml`:
+
+   ```yaml
    host: 192.168.1.2
    port: 5001
    mountIP: "192.168.0.0/18"
@@ -88,25 +98,24 @@ Create a Secret that holds `client-info.yml`. The install scripts usually create
        mountIP: "192.168.0.0/18"
    ```
 
-2. Create the Secret:
+2. Create the Secret so the data key is **`client-info.yml`** (required by the driver):
 
    ```bash
-   kubectl create secret -n <namespace> generic client-info-secret --from-file=config/client-info.yml
+   kubectl create secret generic client-info-secret -n flexa-csi \
+     --from-file=client-info.yml=./config/client-info.yml
    ```
 
-   - Replace `<namespace>` with `flexa-csi` unless you use a custom namespace.
-   - If you rename `client-info-secret`, update references under `deploy/kubernetes/` accordingly.
+   Replace the namespace or file path as needed. If you rename the Secret, update the same name in `deploy/kubernetes/controller.yml` and `node.yml` (or Helm `clientInfo.secretName`).
 
-The driver watches the Secret `client-info-secret` in the driver namespace and applies updates at runtime.
+The driver watches `client-info-secret` in the driver namespace and applies updates at runtime.
 
 ### Creating Storage Classes
 
-Create and apply StorageClasses. Parameter names are **case-sensitive** and must match the driver (for example `poolName`, not `poolname`).
+Parameter names are **case-sensitive** (`poolName`, not `poolname`).
 
-Reference examples in the repository:
+**Helm:** Define entries under `storageClass` in [`charts/flexa-csi/values.yaml`](charts/flexa-csi/values.yaml). Each key can enable a class; ZFS entries set `poolName`, Lustre entries set `clusterName`. The chart template is [`charts/flexa-csi/templates/storageclass.yaml`](charts/flexa-csi/templates/storageclass.yaml).
 
-- ZFS + NFS: [`deploy/kubernetes/storage-class-zfs.yml`](deploy/kubernetes/storage-class-zfs.yml)
-- Lustre + NFS: [`deploy/kubernetes/storage-class-lustre.yml`](deploy/kubernetes/storage-class-lustre.yml)
+**Raw YAML examples:** [`deploy/kubernetes/storage-class-zfs.yml`](deploy/kubernetes/storage-class-zfs.yml), [`deploy/kubernetes/storage-class-lustre.yml`](deploy/kubernetes/storage-class-lustre.yml)
 
 **ZFS example:**
 
@@ -144,17 +153,17 @@ allowVolumeExpansion: true
 
 **Parameters**
 
-| Name            | Required | Description |
-| --------------- | -------- | ----------- |
-| *fs*            | Yes      | Backing layout: `zfs` or `lustre`. |
-| *poolName*      | For `fs=zfs` | ZFS pool name on FlexA. |
-| *clusterName*   | For `fs=lustre` | Lustre cluster name for provisioning. |
-| *protocol*      | Typically set | Storage access protocol (for example `nfs`). |
-| *proxyProfile*  | Optional | Name of a profile under `profiles` in `client-info.yml`. When set, the driver uses that profile’s `proxyIP`, `proxyPort`, and `mountIP` for API calls and VIP resolve. If you rely on the legacy default only, omit it and ensure `host`/`port` are set in the Secret. |
+| Name | Required | Description |
+| ---- | -------- | ----------- |
+| *fs* | Yes | `zfs` or `lustre`. |
+| *poolName* | For `fs=zfs` | ZFS pool name on FlexA. |
+| *clusterName* | For `fs=lustre` | Lustre cluster name. |
+| *protocol* | Typically set | e.g. `nfs`. |
+| *proxyProfile* | Optional | Profile name under `profiles` in `client-info`. When set, the driver uses that profile’s `proxyIP`, `proxyPort`, and `mountIP`. For legacy-only `host`/`port`, omit and ensure the Secret has `host`/`port`. |
 
-`allowVolumeExpansion: true` does not enable expansion until the driver implements CSI expand; it is kept for forward compatibility.
+`allowVolumeExpansion: true` does not enable expansion until the driver implements CSI expand; it is forward-looking.
 
-Apply:
+Apply raw YAML:
 
 ```bash
 kubectl apply -f <storageclass_yaml>
@@ -162,58 +171,48 @@ kubectl apply -f <storageclass_yaml>
 
 ### PVC annotations
 
-At volume creation time, the controller reads **PersistentVolumeClaim** annotations with the `flexa.io/` prefix and passes them to FlexA (ZFS options, secure export, NFS export flags). See [`deploy/kubernetes/pvc_zfs.yaml`](deploy/kubernetes/pvc_zfs.yaml) and [`deploy/kubernetes/pvc_lustre.yaml`](deploy/kubernetes/pvc_lustre.yaml).
+The controller reads **PersistentVolumeClaim** annotations with the `flexa.io/` prefix at volume creation. Examples: [`deploy/kubernetes/pvc_zfs.yaml`](deploy/kubernetes/pvc_zfs.yaml), [`deploy/kubernetes/pvc_lustre.yaml`](deploy/kubernetes/pvc_lustre.yaml).
 
 | Annotation | Purpose (summary) |
 | ---------- | ----------------- |
-| `flexa.io/optionISS` | Instant secure sync (ZFS-related option). |
-| `flexa.io/optionSVS` | Secure volume service. |
-| `flexa.io/optionComp` | Compression. |
-| `flexa.io/optionDedup` | Deduplication (ZFS PVC example sets this; Lustre sample may omit). |
+| `flexa.io/optionISS` | Instant secure sync (ZFS). |
+| `flexa.io/optionSVS` | Secure volume service (ZFS). |
+| `flexa.io/optionComp` | Compression (ZFS). |
+| `flexa.io/optionDedup` | Deduplication (ZFS). |
 | `flexa.io/secureAddress` | Secure network address for export. |
 | `flexa.io/secureSubnet` | Secure network mask. |
 | `flexa.io/nfsAccess` | NFS access mode (e.g. RW). |
-| `flexa.io/nfsNoRootSquashing` | NFS root squashing behavior. |
-| `flexa.io/nfsInsecure` | NFS insecure port behavior. |
+| `flexa.io/nfsNoRootSquashing` | NFS root squashing. |
+| `flexa.io/nfsInsecure` | NFS insecure port. |
 
-Values are typically `"on"` / `"off"` or addresses as in the examples; align with your FlexA documentation.
+Use values such as `"on"` / `"off"` or addresses as in the samples; follow FlexA documentation for your environment.
 
 ### Pod annotations
 
-Used at **NodePublishVolume** (NFS mount path):
+Used at **NodePublishVolume** (NFS mount):
 
 | Annotation | Purpose |
 | ---------- | ------- |
-| `flexa.io/mountOptions` | Comma-separated NFS mount options (for example `vers=4,ro,async,timeo=666`). See [`deploy/kubernetes/pod_zfs.yaml`](deploy/kubernetes/pod_zfs.yaml). |
-| `flexa.io/serviceVIP` | If set, used as the NFS server address for the mount. If empty, the driver uses the controller-provisioned `vip` from the volume’s `VolumeContext`. At least one of these must be present for a successful publish. |
+| `flexa.io/mountOptions` | Comma-separated NFS options (e.g. `vers=4,ro,async,timeo=666`). See [`deploy/kubernetes/pod_zfs.yaml`](deploy/kubernetes/pod_zfs.yaml). |
+| `flexa.io/serviceVIP` | If set, NFS server address for the mount; otherwise the controller-provisioned `vip` from `VolumeContext` is used. One of these must be available for publish to succeed. |
 
 ### VolumeContext (advanced)
 
-On provision, the controller stores metadata on the PV (for example `vip`, `baseDir`, `poolName`, `fs`, `clusterName`, `protocol`, `pvcName`, `pvcNS`, `proxyProfile`, `proxyIP`, `proxyPort`, `mountIP`). You normally do not edit these; they are used for delete operations and node publish. If you troubleshoot mounts, confirm `vip` and `baseDir`, and whether the pod overrides the server with `flexa.io/serviceVIP`.
+On provision, the PV carries metadata such as `vip`, `baseDir`, `poolName`, `fs`, `clusterName`, `protocol`, `pvcName`, `pvcNS`, `proxyProfile`, `proxyIP`, `proxyPort`, `mountIP`. Do not edit these under normal operation; they support delete and node publish. For troubleshooting, check `vip`, `baseDir`, and pod `flexa.io/serviceVIP`.
 
-## Building & Manually Installing
+## Building and publishing images
 
-By default, the CSI driver pulls the latest image from GHCR: `ghcr.io/gluesys/flexa-csi:latest`.
+- Build binary: `make flexa-csi-driver`
+- Build image: `make docker-build`
+- Publish to GHCR: `docker login ghcr.io` then `make docker-publish` (publishes `ghcr.io/gluesys/flexa-csi:1.0.0` and `:latest`)
 
-If you install with a locally built image, set `imagePullPolicy: IfNotPresent` on the `csi-plugin` containers in the manifests under `deploy/kubernetes/`.
+By default the cluster pulls `ghcr.io/gluesys/flexa-csi` from GHCR. For a locally built image, set `imagePullPolicy: IfNotPresent` and the image reference in Helm `values.yaml` or in `deploy/kubernetes/controller.yml` / `node.yml`.
 
-### Building
+**Installing** a build is covered in [Installation](#installation); override `image.repository` / `image.tag` in Helm or edit the manifests before `kubectl apply`.
 
-- Build the binary: `make flexa-csi-driver`
-- Build the image: `make docker-build`, then `docker images` to verify
-- Publish to GHCR:
-  - `docker login ghcr.io`
-  - `make docker-publish` (publishes `ghcr.io/gluesys/flexa-csi:1.0.0` and `:latest`)
+## Uninstall
 
-### Installation
+- **Helm:** `helm uninstall flexa-csi -n flexa-csi` (use `helm list -n flexa-csi` if the release name differs).
+- **Raw manifests:** From `deploy/kubernetes`, run `sh cleanup.sh` (review the script if you customized StorageClass names).
 
-From the repository root:
-
-```bash
-cd deploy/kubernetes
-sh install.sh
-```
-
-### Uninstallation
-
-Ensure no workloads still use FlexA volumes, then from `deploy/kubernetes` run `sh cleanup.sh` (review the script if you use custom StorageClass file names).
+Ensure no workloads still depend on FlexA volumes. PVCs, PVs, and backend volumes may remain depending on `reclaimPolicy` and storage behavior; delete or retain them according to your operations policy.

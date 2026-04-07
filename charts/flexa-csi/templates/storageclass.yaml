@@ -1,0 +1,27 @@
+{{- range $key, $sc := .Values.storageClass }}
+{{- if $sc.enabled }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ $sc.name }}
+  labels:
+    {{- include "flexa-csi.labels" $ | nindent 4 }}
+    flexa-csi/storage-class-key: {{ $key | quote }}
+provisioner: csi.flexa.com
+parameters:
+  proxyProfile: {{ $sc.proxyProfile | quote }}
+{{- if $sc.poolName }}
+  fs: zfs
+  poolName: {{ $sc.poolName | quote }}
+{{- else if $sc.clusterName }}
+  fs: lustre
+  clusterName: {{ $sc.clusterName | quote }}
+{{- else }}
+  {{- fail (printf "values.storageClass.%s: set poolName (ZFS) or clusterName (Lustre)" $key) }}
+{{- end }}
+  protocol: {{ $sc.protocol | quote }}
+reclaimPolicy: {{ $sc.reclaimPolicy }}
+allowVolumeExpansion: {{ $sc.allowVolumeExpansion }}
+{{- end }}
+{{- end }}

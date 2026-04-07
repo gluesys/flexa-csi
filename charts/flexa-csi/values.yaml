@@ -1,0 +1,102 @@
+# Namespace for all namespaced resources (use helm --namespace / -n).
+# Do not template Namespace in-chart: avoids conflicts with existing kubectl-created namespaces.
+namespace: flexa-csi
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/gluesys/flexa-csi
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+logLevel: info
+
+# CSI sidecar images (registry.k8s.io/sig-storage)
+sidecars:
+  provisioner:
+    repository: registry.k8s.io/sig-storage/csi-provisioner
+    tag: v3.0.0
+    pullPolicy: Always
+  attacher:
+    repository: registry.k8s.io/sig-storage/csi-attacher
+    tag: v3.3.0
+    pullPolicy: Always
+  resizer:
+    repository: registry.k8s.io/sig-storage/csi-resizer
+    tag: v1.3.0
+    pullPolicy: Always
+  registrar:
+    repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
+    tag: v2.3.0
+    pullPolicy: Always
+
+controller:
+  replicas: 1
+  hostNetwork: true
+  labels: {}
+  podAnnotations: {}
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+node:
+  hostNetwork: true
+  labels: {}
+  podAnnotations: {}
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  kubeletPath: /var/lib/kubelet
+  pluginDir: /var/lib/kubelet/plugins/csi.flexa.com/
+  registrationDir: /var/lib/kubelet/plugins_registry
+  flexaMetaPath: /var/lib/flexa/meta
+  flexaGroupMountPath: /mnt/flexa
+
+# client-info Secret mounted at /etc/flexa/client-info.yml
+clientInfo:
+  # Kubernetes Secret name (used by controller and node volumes)
+  secretName: client-info-secret
+  # If true, chart creates the Secret from `content` (development / single-step install).
+  # If false, create the Secret yourself before install: kubectl create secret generic ...
+  create: true
+  content: |
+    profiles:
+      zfs:
+        proxyIP: 192.168.34.21
+        proxyPort: 9001
+        mountIP: "100.100.0.0/18"
+      lustre:
+        proxyIP: 192.168.34.11
+        proxyPort: 9001
+        mountIP: "100.100.0.0/18"
+
+# Optional StorageClasses: arbitrary keys (e.g. zfs_poolA). Set enabled: true per entry.
+# ZFS: set poolName. Lustre: set clusterName (not poolName). Align proxyProfile with clientInfo profiles.
+storageClass:
+  zfs_poolA:
+    enabled: false
+    name: flexa-sc-zfs-a
+    reclaimPolicy: Delete
+    allowVolumeExpansion: true
+    proxyProfile: zfs
+    poolName: k8sA
+    protocol: nfs
+  zfs_poolB:
+    enabled: false
+    name: flexa-sc-zfs-b
+    reclaimPolicy: Delete
+    allowVolumeExpansion: true
+    proxyProfile: zfs
+    poolName: k8sB
+    protocol: nfs
+  lustre:
+    enabled: false
+    name: flexa-sc-lustre
+    reclaimPolicy: Delete
+    allowVolumeExpansion: true
+    proxyProfile: lustre
+    clusterName: k8s_cvol
+    protocol: nfs
