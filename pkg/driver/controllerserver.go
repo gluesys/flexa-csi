@@ -499,7 +499,103 @@ func (cs *ControllerServer) ControllerGetVolume(ctx context.Context, req *csi.Co
 }
 
 func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
-    return nil, fmt.Errorf("Not Supported")
+    volumeId := strings.TrimSpace(req.GetVolumeId())
+    if volumeId == "" {
+        return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
+    }
+
+    // Target size
+    newSizeBytes, err := getSizeByCapacityRange(req.GetCapacityRange())
+    if err != nil {
+        return nil, err
+    }
+
+    // Lookup PV attributes to determine fs/pool/cluster and proxy hints.
+    attrs, ok := cs.lookupPVAttributesByVolumeHandle(ctx, volumeId)
+    if !ok || attrs == nil {
+        return nil, status.Errorf(codes.NotFound, "PV attributes not found for volumeHandle=%s", volumeId)
+    }
+
+    fs := strings.TrimSpace(attrs["fs"])
+    if fs == "" {
+        if isLustreVolumeID(volumeId) {
+            fs = "lustre"
+        } else {
+            fs = "zfs"
+        }
+    }
+
+    // Resolve proxy: explicit attrs -> proxyProfile -> legacy default.
+    proxy, ok := proxyFromVolumeAttributes(attrs)
+    if !ok {
+        proxyProfile := strings.TrimSpace(attrs[volAttrProxyProfile])
+        p, err := cs.Driver.SelectProxy(proxyProfile)
+        if err != nil {
+            return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+        }
+        proxy = p
+    }
+
+    reqService := service.NewFlexAService()
+    reqService.SetFep(proxy)
+
+    // Determine backend name and current size (for shrink guard).
+    var poolOrCluster string
+    var backendVolName string
+    var currentSizeBytes int64
+
+    if fs == "lustre" {
+        poolOrCluster = strings.TrimSpace(attrs["clusterName"])
+        if poolOrCluster == "" {
+            return nil, status.Error(codes.InvalidArgument, "Missing clusterName in PV attributes")
+        }
+        v, ok := lustreVolNameFromVolumeID(volumeId)
+        if !ok {
+            return nil, status.Error(codes.InvalidArgument, "Invalid lustre volumeId")
+        }
+        backendVolName = v
+
+        // Lustre info path exists; size may not be provided in current driver responses (often 0).
+        // We still rely on proxy to reject invalid downsizes, but try to guard when possible.
+        if info := reqService.GetVolume(poolOrCluster, backendVolName); info != nil {
+            currentSizeBytes = info.Size
+        }
+    } else {
+        poolOrCluster = strings.TrimSpace(attrs["poolName"])
+        if poolOrCluster == "" {
+            return nil, status.Error(codes.InvalidArgument, "Missing poolName in PV attributes")
+        }
+        backendVolName = models.GenVolumeName(volumeId)
+        if info := reqService.GetVolume(poolOrCluster, backendVolName); info != nil {
+            currentSizeBytes = info.Size
+        }
+    }
+
+    // Idempotency: if already at/above requested size, do not call proxy expand again.
+    if currentSizeBytes > 0 && newSizeBytes <= currentSizeBytes {
+        return &csi.ControllerExpandVolumeResponse{
+            CapacityBytes:         currentSizeBytes,
+            NodeExpansionRequired: false,
+        }, nil
+    }
+
+    if err := reqService.ExpandVolume(fs, poolOrCluster, backendVolName, newSizeBytes); err != nil {
+        return nil, status.Errorf(codes.Internal, "ExpandVolume failed: %v", err)
+    }
+
+    // Fetch updated size when possible, otherwise return requested size.
+    capBytes := newSizeBytes
+    if info := reqService.GetVolume(poolOrCluster, backendVolName); info != nil && info.Size > 0 {
+        capBytes = info.Size
+    }
+    if currentSizeBytes > 0 && capBytes < currentSizeBytes {
+        capBytes = currentSizeBytes
+    }
+
+    return &csi.ControllerExpandVolumeResponse{
+        CapacityBytes:         capBytes,
+        NodeExpansionRequired: false,
+    }, nil
 }
 
 func (cs *ControllerServer) ControllerModifyVolume(ctx context.Context, req *csi.ControllerModifyVolumeRequest) (*csi.ControllerModifyVolumeResponse, error) {

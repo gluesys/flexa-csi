@@ -615,6 +615,21 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 
 
 func (ns *NodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
-    return nil, fmt.Errorf("Not Supoorted")
+    if req.GetVolumeId() == "" {
+        return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
+    }
+    if req.GetVolumePath() == "" {
+        return nil, status.Error(codes.InvalidArgument, "Volume path missing in request")
+    }
+
+    // Current driver uses NFS mounts; there is no filesystem resize step here.
+    // Return success so the external-resizer can complete the workflow.
+    capBytes, err := getSizeByCapacityRange(req.GetCapacityRange())
+    if err != nil {
+        return nil, err
+    }
+    return &csi.NodeExpandVolumeResponse{
+        CapacityBytes: capBytes,
+    }, nil
 }
 

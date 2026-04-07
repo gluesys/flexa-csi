@@ -18,7 +18,7 @@ type FlexAService interface {
     ListVolumes(poolName string) ([]string, error)
     PoolInfo(poolName string) (interface{}, error)
     GetVolume(poolName string, volName string) *models.K8sVolumeRespSpec
-    //ExpandVolume(volId string, newSize int64) (*models.VolumeRespSpec, error)
+    ExpandVolume(fs string, poolOrCluster string, volName string, newSizeBytes int64) error
     //TODO
     //CreateSnapshot(spec *models.CreatSnapshotSpec) (*models.CreateSnapshotResSpec, error)
     //DeleteSnapshot(snapshotUuid string) error

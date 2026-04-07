@@ -20,7 +20,7 @@ import (
     "github.com/gluesys/flexa-csi/pkg/flexa/common"
     "github.com/gluesys/flexa-csi/pkg/flexa/webapi"
     "github.com/gluesys/flexa-csi/pkg/models"
-    //"csi/pkg/utils"
+    "github.com/gluesys/flexa-csi/pkg/utils"
 )
 
 type FlexAService struct {
@@ -246,12 +246,17 @@ func (service *FlexAService) GetVolume(poolName string, volName string)  *models
             log.Errorf("FlexA Call(GetVolume) : Lustre VIP resolve failed: %v", err)
             return nil
         }
+        // Lustre API returns quota in MB (quota.limitMb). Convert to bytes when available.
+        sizeBytes := int64(0)
+        if info.Quota.LimitMb > 0 {
+            sizeBytes = info.Quota.LimitMb * utils.UNIT_MB
+        }
         return &models.K8sVolumeRespSpec{
             Vip:        vip,
             VolumeId:   volName,
             PoolName:   "",
             VolumeName: info.VolName,
-            Size:       0,
+            Size:       sizeBytes,
             Fs:         "lustre",
             BaseDir:    info.Path,
         }
@@ -283,7 +288,10 @@ func (service *FlexAService) GetVolume(poolName string, volName string)  *models
                 Vip:        vip,
                 VolumeName: volInfo.VolName,
                 PoolName:   volInfo.PoolName,
-                Size:       volInfo.Total,
+                // ZFS volume_info returns total/used/free in MB. Convert to bytes for CSI.
+                Size:       volInfo.Total * utils.UNIT_MB,
+                Used:       volInfo.Used * utils.UNIT_MB,
+                Free:       volInfo.Free * utils.UNIT_MB,
                 Fs:         "zfs",
                 BaseDir:    volInfo.BaseDir,
             }
@@ -297,7 +305,28 @@ func (service *FlexAService) GetVolume(poolName string, volName string)  *models
     return nil
 }
 
-// func (service *FlexAService) ExpandVolume(volId string, newSize int64) (*models.K8sVolumeRespSpec, error) {}
+func (service *FlexAService) ExpandVolume(fs string, poolOrCluster string, volName string, newSizeBytes int64) error {
+    if service == nil || service.fep == nil {
+        return fmt.Errorf("service is not initialized")
+    }
+    if strings.TrimSpace(volName) == "" {
+        return fmt.Errorf("volName is required")
+    }
+    if strings.TrimSpace(poolOrCluster) == "" {
+        return fmt.Errorf("poolOrCluster is required")
+    }
+    if newSizeBytes <= 0 {
+        return fmt.Errorf("newSizeBytes must be positive")
+    }
+
+    if fs == "" {
+        fs = "zfs"
+    }
+    if fs == "lustre" {
+        return service.fep.LustreExpandVolume(poolOrCluster, volName, newSizeBytes)
+    }
+    return service.fep.ZfsExpandVolume(poolOrCluster, volName, newSizeBytes)
+}
 
 //TODO func (service *FlexAService) GetSnapshotByName(snapshotName string) *models.K8sSnapshotRespSpec {}
 

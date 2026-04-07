@@ -25,6 +25,11 @@ type LustreVolumeInfoResponse struct {
 	VolName     string `json:"volName"`
 	VolumeId    string `json:"volumeId"`
 	Path        string `json:"path"`
+	Quota       struct {
+		LimitMb int64 `json:"limitMb"`
+		UsedMb  int64 `json:"usedMb"`
+		FreeMb  int64 `json:"freeMb"`
+	} `json:"quota"`
 	Status      string `json:"status"`
 }
 
@@ -84,6 +89,22 @@ func (fep *FEP) LustreInfoVolume(clusterName string, volName string) (LustreVolu
 		return LustreVolumeInfoResponse{}, err
 	}
 	return output, nil
+}
+
+func (fep *FEP) LustreExpandVolume(clusterName string, volName string, newSizeBytes int64) error {
+	if clusterName == "" || volName == "" {
+		return fmt.Errorf("clusterName and volName are required")
+	}
+	if newSizeBytes <= 0 {
+		return fmt.Errorf("newSizeBytes must be positive")
+	}
+	body := map[string]string{
+		"sizeValue": fmt.Sprintf("%d", utils.BytesToMB(newSizeBytes)),
+		"sizeUnit":  "MB",
+	}
+	cgiPath := fmt.Sprintf("lustre/cluster/%s/volume/%s/expand", clusterName, volName)
+	_, err := fep.lustrePost(cgiPath, body)
+	return err
 }
 
 func (fep *FEP) lustrePost(cgiPath string, body map[string]string) (LustreVolumeCreateResponse, error) {

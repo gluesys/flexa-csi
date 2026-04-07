@@ -222,4 +222,29 @@ func (fep *FEP) ZfsDeleteVolume(volName string, shareName string, poolName strin
     return nil
 }
 
+func (fep *FEP) ZfsExpandVolume(poolName string, volName string, newSizeBytes int64) error {
+    if poolName == "" || volName == "" {
+        return fmt.Errorf("poolName and volName are required")
+    }
+    if newSizeBytes <= 0 {
+        return fmt.Errorf("newSizeBytes must be positive")
+    }
+
+    params := url.Values{}
+    params.Set("sizeValue", fmt.Sprintf("%d", utils.BytesToMB(newSizeBytes)))
+    params.Set("sizeUnit", "MB")
+
+    cgiPath := fmt.Sprintf("zfs/pool/%s/volume/%s/expand", poolName, volName)
+
+    // Proxy returns envelope {data,msg}; expand doesn't require a typed response payload here.
+    var out map[string]interface{}
+    _, err := fep.sendRequest("post", &out, params, cgiPath)
+    if err != nil {
+        return err
+    }
+
+    log.Infof("FlexA Call(ZfsExpandVolume) Requests : %v", params)
+    return nil
+}
+
 
