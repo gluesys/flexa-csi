@@ -16,12 +16,12 @@ The FlexA CSI driver supports:
 - **Controller:** Create/Delete volume, List volumes, Get capacity.
 - **Node:** Stage/Unstage (no-op for the current NFS flow), Publish/Unpublish, Get volume stats.
 
-**Not supported at this time:** volume expansion (controller and node return not supported), snapshots, cloning.
+**Not supported at this time:** snapshots, cloning. Volume expansion is supported (expand-only; shrink is not supported).
 
 ## Prerequisites
 
 - Kubernetes 1.21 or above
-- FlexA Storage (e.g. 1.4.0 ZFS) with at least one storage pool for ZFS-backed volumes, or Lustre cluster configuration as required by your deployment
+- FlexA Storage (**FlexStor**, **ExaStor**) **1.4.2 or above**, with at least one storage pool for ZFS-backed volumes, or Lustre cluster configuration as required by your deployment
 - Go 1.21+ recommended when building from source
 
 ### Before you install
@@ -74,7 +74,7 @@ Contents: [client-info / Secret](#client-info--secret) · [StorageClasses](#crea
 
 **Helm:** Configure proxy endpoints in `charts/flexa-csi/values.yaml` (`clientInfo.content`) or use `-f` / `--set-file` as described in [Installation](#installation).
 
-**Raw manifests:** Prepare `config/client-info.yml` with either a legacy `host`/`port` default and/or `profiles` (`proxyIP`, `proxyPort`, optional `mountIP` for VIP resolve). See the template at [`config/client-info-template.yml`](config/client-info-template.yml).
+**Raw manifests:** Prepare `config/client-info.yml` with `profiles` (`proxyIP`, `proxyPort`, optional `mountIP` for VIP resolve). See the template at [`config/client-info-template.yml`](config/client-info-template.yml).
 
 #### Creating the Secret manually
 
@@ -83,16 +83,12 @@ Use when not using Helm, or when you pre-create the Secret for Helm (`clientInfo
 1. Example `config/client-info.yml`:
 
    ```yaml
-   host: 192.168.1.2
-   port: 5001
-   mountIP: "192.168.0.0/18"
-
    profiles:
-     prodA:
+     zfs:
        proxyIP: 10.0.0.11
        proxyPort: 9001
        mountIP: "192.168.0.0/18"
-     prodB:
+     lustre:
        proxyIP: 10.0.0.12
        proxyPort: 9001
        mountIP: "192.168.0.0/18"
@@ -129,7 +125,7 @@ parameters:
   fs: "zfs"
   poolName: "kubernetes"
   protocol: "nfs"
-  proxyProfile: "prodA"
+  proxyProfile: "zfs"
 reclaimPolicy: Delete
 allowVolumeExpansion: true
 ```
@@ -159,9 +155,9 @@ allowVolumeExpansion: true
 | *poolName* | For `fs=zfs` | ZFS pool name on FlexA. |
 | *clusterName* | For `fs=lustre` | Lustre cluster name. |
 | *protocol* | Typically set | e.g. `nfs`. |
-| *proxyProfile* | Optional | Profile name under `profiles` in `client-info`. When set, the driver uses that profile’s `proxyIP`, `proxyPort`, and `mountIP`. For legacy-only `host`/`port`, omit and ensure the Secret has `host`/`port`. |
+| *proxyProfile* | Optional | Profile name under `profiles` in `client-info`. When set, the driver uses that profile’s `proxyIP`, `proxyPort`, and `mountIP`. |
 
-`allowVolumeExpansion: true` does not enable expansion until the driver implements CSI expand; it is forward-looking.
+Volume expansion is **expand-only**. Shrink (reducing requested size) is not supported.
 
 Apply raw YAML:
 
