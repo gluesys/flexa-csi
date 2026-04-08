@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 Synology Inc.
+ * Copyright 2025 Gluesys FlexA Inc.
  */
 
 package webapi
@@ -54,7 +54,7 @@ func (fep *FEP) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 
     // Ex: http://10.12.12.14:9001/
     cgiUrl = fmt.Sprintf("http://%s:%d/%s", fep.Ip, fep.Port, cgiPath)
-    log.Infof("FlexA Webapi Call Path : %s", cgiUrl)
+    log.Infof("Gluesys FlexA Webapi Call Path : %s", cgiUrl)
     baseUrl, err := url.Parse(cgiUrl)
     if err != nil {
         return Response{}, err

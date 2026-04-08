@@ -40,7 +40,7 @@ type CreateShareSpec struct {
 //TODO type CreateSnapshotResSpec struct {}
 
 type K8sVolumeRespSpec struct {
-    Vip                 string // FlexA NFS Mount Vip
+    Vip                 string // Gluesys FlexA NFS mount VIP
     VolumeId            string // Volume UUID
     PoolName            string // Pool Name
     VolumeName          string // Volume Name

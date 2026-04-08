@@ -1,4 +1,4 @@
-// Copyright 2021 Synology Inc.
+// Copyright 2025 Gluesys FlexA Inc.
 
 package logger
 

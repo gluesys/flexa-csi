@@ -109,7 +109,7 @@ func (fep *FEP) LustreExpandVolume(clusterName string, volName string, newSizeBy
 
 func (fep *FEP) lustrePost(cgiPath string, body map[string]string) (LustreVolumeCreateResponse, error) {
 	cgiUrl := fmt.Sprintf("http://%s:%d/%s", fep.Ip, fep.Port, cgiPath)
-	log.Infof("FlexA Webapi Call Path : %s", cgiUrl)
+	log.Infof("Gluesys FlexA Webapi Call Path : %s", cgiUrl)
 
 	payload, err := json.Marshal(body)
 	if err != nil {

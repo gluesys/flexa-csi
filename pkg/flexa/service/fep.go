@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 FlexA Inc.
+ * Copyright 2025 Gluesys FlexA Inc.
  */
 
 package service
@@ -45,7 +45,7 @@ func (service *FlexAService) SetFep(proxy *common.ProxyInfo) {
     }
 
     service.fep = fep
-    log.Infof("FlexA Call(SetFep) : %s (mountIP=%s).", fep.Ip, fep.MountIP)
+    log.Infof("Gluesys FlexA Call(SetFep) : %s (mountIP=%s).", fep.Ip, fep.MountIP)
 }
 
 
@@ -98,7 +98,7 @@ func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*model
             nfsInsecure,
         )
         if err != nil {
-            log.Errorf("FlexA Call(CreateVolume) : Fail Create Lustre Volume(%s)", volName)
+            log.Errorf("Gluesys FlexA Call(CreateVolume) : Fail Create Lustre Volume(%s)", volName)
             return nil, err
         }
         baseDir = resp.Path
@@ -106,14 +106,14 @@ func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*model
         // Create ZFS Volume
         err := service.fep.ZfsCreateVolume(spec.Size, volId, volName, poolName, optionSVS, optionISS, optionComp, optionDedup)
         if err != nil {
-            log.Errorf("FlexA Call(CreateVolume) : Fail Create Volume(%s)",volName)
+            log.Errorf("Gluesys FlexA Call(CreateVolume) : Fail Create Volume(%s)",volName)
             return nil, err
         }
 
         //Create Share
         baseDir, err = service.fep.ZfsCreateShareNfs(volId, volName, poolName, secureName,secureAddr,secureSub,nfsAccess,nfsNoRoot,nfsInsecure)
         if err != nil {
-            log.Errorf("FlexA Call(CreateShare) : Fail Create Share in Volume(%s)",volName)
+            log.Errorf("Gluesys FlexA Call(CreateShare) : Fail Create Share in Volume(%s)",volName)
             return nil, err
         }
     }
@@ -126,7 +126,7 @@ func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*model
         vip, err = service.fep.ResolveZfsVip(poolName, refForVip)
     }
     if err != nil {
-        log.Errorf("FlexA Call(CreateVolume) : VIP resolve failed: %v", err)
+        log.Errorf("Gluesys FlexA Call(CreateVolume) : VIP resolve failed: %v", err)
         return nil, err
     }
 
@@ -145,7 +145,7 @@ func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*model
        BaseDir:     baseDir,
     }
 
-    log.Infof("FlexA Call(CreateVolume) : Success Create Volume(%s)", volName)
+    log.Infof("Gluesys FlexA Call(CreateVolume) : Success Create Volume(%s)", volName)
 
     return ret, nil
 }
@@ -159,21 +159,21 @@ func (service *FlexAService) DeleteVolume(fs string, poolName string, shareName 
     if fs == "lustre" {
         err := service.fep.LustreDeleteVolume(poolName, volName)
         if err != nil {
-            log.Errorf("FlexA Call(DeleteVolume) : Fail Delete Lustre Volume(%s)", volName)
+            log.Errorf("Gluesys FlexA Call(DeleteVolume) : Fail Delete Lustre Volume(%s)", volName)
             return err
         }
-        log.Infof("FlexA Call(DeleteVolume) : Success Delete Lustre Volume(%s)", volName)
+        log.Infof("Gluesys FlexA Call(DeleteVolume) : Success Delete Lustre Volume(%s)", volName)
         return nil
     }
 
     err := service.fep.ZfsDeleteVolume(volName, shareName, poolName)
 
     if err != nil {
-        log.Errorf("FlexA Call(DeleteVolume) : Fail Delete Volume(%s)", volName)
+        log.Errorf("Gluesys FlexA Call(DeleteVolume) : Fail Delete Volume(%s)", volName)
         return err
     }
 
-    log.Infof("FlexA Call(DeleteVolume) : Success Delete Volume(%s)", volName)
+    log.Infof("Gluesys FlexA Call(DeleteVolume) : Success Delete Volume(%s)", volName)
 
     return nil
 }
@@ -183,11 +183,11 @@ func (service *FlexAService) ListPools() ([]string, error) {
     poolList, err := service.fep.ListZfsPool()
     if err != nil {
         var out []string
-        log.Error("FlexA Call(ListPools) : Fail")
+        log.Error("Gluesys FlexA Call(ListPools) : Fail")
         return out, err
     }
 
-    log.Info("FlexA Call(ListPools) : Success")
+    log.Info("Gluesys FlexA Call(ListPools) : Success")
 
     return poolList, nil
 }
@@ -197,11 +197,11 @@ func (service *FlexAService) ListVolumes(poolName string) ([]string, error) {
 
     if err != nil {
         var out []string
-        log.Error("FlexA Call(ListVolumes) : Fail")
+        log.Error("Gluesys FlexA Call(ListVolumes) : Fail")
         return out, err
     }
 
-    log.Info("FlexA Call(ListVolumes) : Success")
+    log.Info("Gluesys FlexA Call(ListVolumes) : Success")
 
     return volList, nil
 }
@@ -211,11 +211,11 @@ func (service *FlexAService) PoolInfo(poolName string) (interface{}, error) {
 
     if err != nil {
         var out interface{}
-        log.Errorf("FlexA Call(PoolInfo) : Fail Pool(%s) Info",poolName)
+        log.Errorf("Gluesys FlexA Call(PoolInfo) : Fail Pool(%s) Info",poolName)
         return out, err
     }
 
-    log.Infof("FlexA Call(PoolInfo) : Success Pool(%s) Info",poolName)
+    log.Infof("Gluesys FlexA Call(PoolInfo) : Success Pool(%s) Info",poolName)
 
     return poolInfo, nil
 }
@@ -226,7 +226,7 @@ func (service *FlexAService) volumeInfo(poolName string, volName string) (webapi
         return webapi.ZfsVolInfo{}, err
     }
 
-    log.Infof("FlexA Call(volumeInfo) : Success Volume(%s) Info", volName)
+    log.Infof("Gluesys FlexA Call(volumeInfo) : Success Volume(%s) Info", volName)
 
     return volInfo, nil
 }
@@ -247,7 +247,7 @@ func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName 
         clusterName := strings.TrimSpace(poolOrCluster)
         v := strings.TrimSpace(volName)
         if clusterName == "" || v == "" {
-            log.Errorf("FlexA Call(GetVolume): empty clusterName or volName for lustre")
+            log.Errorf("Gluesys FlexA Call(GetVolume): empty clusterName or volName for lustre")
             return nil
         }
         info, err := service.fep.LustreInfoVolume(clusterName, v)
@@ -256,7 +256,7 @@ func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName 
         }
         vip, err := service.fep.ResolveLustreVip(refForVip)
         if err != nil {
-            log.Errorf("FlexA Call(GetVolume) : Lustre VIP resolve failed: %v", err)
+            log.Errorf("Gluesys FlexA Call(GetVolume) : Lustre VIP resolve failed: %v", err)
             return nil
         }
         sizeBytes := int64(0)
@@ -276,14 +276,14 @@ func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName 
 
     poolName := strings.TrimSpace(poolOrCluster)
     if poolName == "" {
-        log.Errorf("FlexA Call(GetVolume): empty poolName for ZFS volume %q", volName)
+        log.Errorf("Gluesys FlexA Call(GetVolume): empty poolName for ZFS volume %q", volName)
         return nil
     }
 
     vols, err := service.ListVolumes(poolName)
 
     if err != nil {
-        log.Errorf("FlexA Call(GetVolume) : Fail Volume(%s)", volName)
+        log.Errorf("Gluesys FlexA Call(GetVolume) : Fail Volume(%s)", volName)
         return nil
     }
 
@@ -296,7 +296,7 @@ func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName 
 
             vip, err := service.fep.ResolveZfsVip(poolName, refForVip)
             if err != nil {
-                log.Errorf("FlexA Call(GetVolume) : ZFS VIP resolve failed: %v", err)
+                log.Errorf("Gluesys FlexA Call(GetVolume) : ZFS VIP resolve failed: %v", err)
                 return nil
             }
 
@@ -312,7 +312,7 @@ func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName 
                 BaseDir:    volInfo.BaseDir,
             }
 
-            log.Infof("FlexA Call(GetVolume) : Success Volume(%s)", volName)
+            log.Infof("Gluesys FlexA Call(GetVolume) : Success Volume(%s)", volName)
 
             return info
         }

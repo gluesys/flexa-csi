@@ -1,4 +1,4 @@
-// Copyright 2025 FlexA Inc.
+// Copyright 2025 Gluesys FlexA Inc.
 
 package interfaces
 
@@ -8,7 +8,7 @@ import (
     "github.com/gluesys/flexa-csi/pkg/models"
 )
 
-// An interface for FlexA service
+// An interface for the Gluesys FlexA storage service layer
 
 type FlexAService interface {
     SetFep(proxy *common.ProxyInfo)

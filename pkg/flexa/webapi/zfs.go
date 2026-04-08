@@ -58,7 +58,7 @@ func (fep *FEP) ListZfsPool() ([]string, error) {
         poolList = append(poolList, pool)
     }
 
-    log.Infof("FlexA Call(LisZfsPool) Response : %v", resp)
+    log.Infof("Gluesys FlexA Call(LisZfsPool) Response : %v", resp)
 
 
     return poolList, nil
@@ -82,7 +82,7 @@ func (fep *FEP) ListZfsVolume(poolName string) ([]string, error) {
         volList = append(volList, vol)
     }
 
-    log.Infof("FlexA Call(ListZfsVolume) Response: %v", resp)
+    log.Infof("Gluesys FlexA Call(ListZfsVolume) Response: %v", resp)
 
     return volList, nil
 }
@@ -99,7 +99,7 @@ func (fep *FEP) InfoZfsPool(poolName string) (ZfsPoolInfo, error) {
         return ZfsPoolInfo{}, err
     }
 
-    log.Infof("FlexA Call(InfoZfsPool) Response : %v", resp)
+    log.Infof("Gluesys FlexA Call(InfoZfsPool) Response : %v", resp)
 
     return output, nil
 }
@@ -116,7 +116,7 @@ func (fep *FEP) InfoZfsVol(poolName string, volName string) (ZfsVolInfo, error) 
         return ZfsVolInfo{}, err
     }
 
-    log.Infof("FlexA Call(InfoZfsVol) Response : %v", resp)
+    log.Infof("Gluesys FlexA Call(InfoZfsVol) Response : %v", resp)
 
     return output, nil
 }
@@ -148,8 +148,8 @@ func (fep *FEP) ZfsCreateVolume(size int64, volId string, volName string, poolNa
         return err
     }
 
-    log.Infof("FlexA Call(zfsCreateVolume) Requests : %v", params)
-    log.Infof("FlexA Call(ZfsCreateVolume) Response : %v", resp)
+    log.Infof("Gluesys FlexA Call(zfsCreateVolume) Requests : %v", params)
+    log.Infof("Gluesys FlexA Call(ZfsCreateVolume) Response : %v", resp)
 
     return nil
 }
@@ -188,8 +188,8 @@ func (fep *FEP) ZfsCreateShareNfs(volId string, volName string, poolName string,
         return "", err
     }
 
-    log.Infof("Flexa Call(zfsCreateShareNfs) Requests : %v", params)
-    log.Infof("FlexA Call(ZfsCreateShareNfs) Response : %v", resp)
+    log.Infof("Gluesys FlexA Call(zfsCreateShareNfs) Requests : %v", params)
+    log.Infof("Gluesys FlexA Call(ZfsCreateShareNfs) Response : %v", resp)
 
     return sharePath, nil
 }
@@ -219,7 +219,7 @@ func (fep *FEP) ZfsDeleteVolume(volName string, shareName string, poolName strin
         return err
     }
 
-    log.Infof("FlexA Call(ZfsDeleteVolume) Response : %v", resp)
+    log.Infof("Gluesys FlexA Call(ZfsDeleteVolume) Response : %v", resp)
 
     return nil
 }
@@ -245,7 +245,7 @@ func (fep *FEP) ZfsExpandVolume(poolName string, volName string, newSizeBytes in
         return err
     }
 
-    log.Infof("FlexA Call(ZfsExpandVolume) Requests : %v", params)
+    log.Infof("Gluesys FlexA Call(ZfsExpandVolume) Requests : %v", params)
     return nil
 }
 

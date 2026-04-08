@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 FlexA Inc.
+ * Copyright 2025 Gluesys FlexA Inc.
  */
 
 package common
@@ -14,7 +14,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// ProxyInfo describes one FlexA CSI proxy endpoint and VIP resolve reference.
+// ProxyInfo describes one Gluesys FlexA CSI proxy endpoint and VIP resolve reference.
 // Host/Port are used for HTTP to the proxy; MountIP (e.g. 192.168.0.0/18) is used for VIP resolve body ip when set.
 type ProxyInfo struct {
 	Host     string `yaml:"host,omitempty"`
@@ -80,7 +80,7 @@ func LoadClientInfoConfigFromReader(r io.Reader) (*ClientInfoConfig, error) {
 		}
 	}
 
-	log.Infof("FlexA Call(LoadClientInfoConfig) : default=%v profiles=%d", cfg.Default != nil, len(cfg.Profiles))
+	log.Infof("Gluesys FlexA Call(LoadClientInfoConfig) : default=%v profiles=%d", cfg.Default != nil, len(cfg.Profiles))
 	return cfg, nil
 }
 

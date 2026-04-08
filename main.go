@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 Synology Inc.
+ * Copyright 2025 Gluesys FlexA Inc.
  */
 
 package main
@@ -30,7 +30,7 @@ var (
 
 var rootCmd = &cobra.Command{
     Use:   "flexa-csi-driver",
-    Short: "FlexA CSI Driver",
+    Short: "Gluesys FlexA CSI Driver",
     SilenceUsage: true,
     RunE:  func(cmd *cobra.Command, args []string) error {
         if webapiDebug {
@@ -96,7 +96,7 @@ func main() {
 func addFlags(cmd *cobra.Command) {
     cmd.PersistentFlags().StringVar(&csiNodeID, "nodeid", csiNodeID, "Node ID")
     cmd.PersistentFlags().StringVarP(&csiEndpoint, "endpoint", "e", csiEndpoint, "CSI endpoint")
-    cmd.PersistentFlags().StringVarP(&csiClientInfoPath, "client-info", "f", csiClientInfoPath, "Path of Synology config yaml file")
+    cmd.PersistentFlags().StringVarP(&csiClientInfoPath, "client-info", "f", csiClientInfoPath, "Path to Gluesys FlexA client-info YAML (proxy profiles)")
     cmd.PersistentFlags().StringVar(&logLevel, "log-level", logLevel, "Log level (debug, info, warn, error, fatal)")
     cmd.PersistentFlags().BoolVarP(&webapiDebug, "debug", "d", webapiDebug, "Enable webapi debugging logs")
     cmd.PersistentFlags().BoolVar(&multipathForUC, "multipath", multipathForUC, "Set to 'false' to disable multipath for UC")
