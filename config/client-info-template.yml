@@ -1,16 +1,12 @@
-# Legacy default proxy endpoint (optional if you always set StorageClass proxyProfile)
-host: 192.168.7.188
-port: 9001
-# VIP resolve reference for NFS mount (e.g. CIDR 192.168.0.0/18). Recommended for stable VIP after storage fail-over.
-mountIP: "192.168.0.0/18"
+# client-info.yml — proxy profiles (select per StorageClass via parameters.proxyProfile).
+# Each profile requires proxyIP and proxyPort; mountIP is optional (VIP resolve for NFS).
 
-# Multiple proxy profiles (selectable per StorageClass via parameters.proxyProfile)
 profiles:
-  prodA:
-    proxyIP: 10.0.0.11
+  zfs:
+    proxyIP: 192.168.34.21
     proxyPort: 9001
-    mountIP: "192.168.0.0/18"
-  prodB:
-    proxyIP: 10.0.0.12
+    mountIP: "100.100.0.0/18"
+  lustre:
+    proxyIP: 192.168.34.11
     proxyPort: 9001
-    mountIP: "192.168.0.0/18"
+    mountIP: "100.100.0.0/18"
