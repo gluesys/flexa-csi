@@ -13,11 +13,11 @@ import (
 type FlexAService interface {
     SetFep(proxy *common.ProxyInfo)
     CreateVolume(spec *models.CreateVolumeSpec) (*models.K8sVolumeRespSpec, error)
-    DeleteVolume(poolName string, shareName string, volumeName string) error
+    DeleteVolume(fs string, poolName string, shareName string, volumeName string) error
     ListPools() ([]string, error)
     ListVolumes(poolName string) ([]string, error)
     PoolInfo(poolName string) (interface{}, error)
-    GetVolume(poolName string, volName string) *models.K8sVolumeRespSpec
+    GetVolume(fs string, poolOrCluster string, volName string) *models.K8sVolumeRespSpec
     ExpandVolume(fs string, poolOrCluster string, volName string, newSizeBytes int64) error
     //TODO
     //CreateSnapshot(spec *models.CreatSnapshotSpec) (*models.CreateSnapshotResSpec, error)

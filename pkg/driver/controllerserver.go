@@ -36,6 +36,7 @@ import (
 
     "github.com/gluesys/flexa-csi/pkg/flexa/common"
     "github.com/gluesys/flexa-csi/pkg/flexa/service"
+    "github.com/gluesys/flexa-csi/pkg/flexa/webapi"
     "github.com/gluesys/flexa-csi/pkg/interfaces"
     "github.com/gluesys/flexa-csi/pkg/models"
     "github.com/gluesys/flexa-csi/pkg/utils"
@@ -108,23 +109,6 @@ func parseNfsVesrion(ops []string) string {
         }
     }
     return ""
-}
-
-const lustreVolumeIDPrefix = "k8s-csi-share-"
-
-func isLustreVolumeID(volumeID string) bool {
-    return strings.HasPrefix(volumeID, lustreVolumeIDPrefix)
-}
-
-func lustreVolNameFromVolumeID(volumeID string) (string, bool) {
-    if !isLustreVolumeID(volumeID) {
-        return "", false
-    }
-    vol := strings.TrimPrefix(volumeID, lustreVolumeIDPrefix)
-    if vol == "" {
-        return "", false
-    }
-    return vol, true
 }
 
 func (cs *ControllerServer) lookupPVAttributesByVolumeHandle(ctx context.Context, volumeID string) (map[string]string, bool) {
@@ -229,12 +213,9 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
         }
     }
 
-    backingName := models.GenVolumeName(volName)
+    // CSI VolumeHandle and backend volume name: same as provisioner volume name (no k8s-csi- prefix).
+    backingName := volName
     volumeID := volName
-    if fs == "lustre" {
-        backingName = volName
-        volumeID = models.GenShareName(volName) // k8s-csi-share-<volName>
-    }
 
     poolOrCluster := poolName
     if fs == "lustre" {
@@ -259,11 +240,10 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
         NfsInsecure:      nfsInsecure,
     }
 
-    lookupKey := backingName
     lookupPool := poolName
+    lookupKey := volName
     if fs == "lustre" {
         lookupPool = clusterName
-        lookupKey = volName
     }
 
     proxy, err := cs.Driver.SelectProxy(proxyProfile)
@@ -273,7 +253,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
     reqService := service.NewFlexAService()
     reqService.SetFep(proxy)
 
-    k8sVolume := reqService.GetVolume(lookupPool, lookupKey)
+    k8sVolume := reqService.GetVolume(fs, lookupPool, lookupKey)
     if k8sVolume == nil {
         k8sVolume, err = reqService.CreateVolume(spec)
         if err != nil {
@@ -313,46 +293,18 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
         return nil, status.Errorf(codes.InvalidArgument, "No volume id is provided")
     }
 
-    if isLustreVolumeID(volumeId) {
-        attrs, ok := cs.lookupPVAttributesByVolumeHandle(ctx, volumeId)
-        if !ok {
-            return &csi.DeleteVolumeResponse{}, nil
-        }
-        clusterName := attrs["clusterName"]
-        lustreVol, ok := lustreVolNameFromVolumeID(volumeId)
-        if !ok || clusterName == "" {
-            return nil, status.Errorf(codes.InvalidArgument, "Invalid lustre volumeId or missing clusterName")
-        }
-
-        // Resolve proxy: explicit attrs -> proxyProfile -> legacy default
-        proxy, ok := proxyFromVolumeAttributes(attrs)
-        if !ok {
-            proxyProfile := strings.TrimSpace(attrs[volAttrProxyProfile])
-            p, err := cs.Driver.SelectProxy(proxyProfile)
-            if err != nil {
-                return nil, status.Errorf(codes.InvalidArgument, "%v", err)
-            }
-            proxy = p
-        }
-        reqService := service.NewFlexAService()
-        reqService.SetFep(proxy)
-
-        if err := reqService.DeleteVolume(clusterName, lustreVol, lustreVol); err != nil {
-            return nil, status.Errorf(codes.Internal,
-                fmt.Sprintf("Failed to DeleteVolume(%s), err: %v", volumeId, err))
-        }
+    attrs, ok := cs.lookupPVAttributesByVolumeHandle(ctx, volumeId)
+    if !ok {
         return &csi.DeleteVolumeResponse{}, nil
     }
 
-    attrs, _ := cs.lookupPVAttributesByVolumeHandle(ctx, volumeId)
+    fs := volumeFsFromAttrs(attrs)
     poolName := cs.Driver.PoolName
     if attrs != nil {
         if p := strings.TrimSpace(attrs["poolName"]); p != "" {
             poolName = p
         }
     }
-    volumeName := models.GenVolumeName(volumeId)
-    shareName := models.GenShareName(volumeId)
 
     proxy, ok := proxyFromVolumeAttributes(attrs)
     if !ok {
@@ -369,7 +321,19 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
     reqService := service.NewFlexAService()
     reqService.SetFep(proxy)
 
-    if err := reqService.DeleteVolume(poolName, shareName, volumeName); err != nil {
+    if fs == "lustre" {
+        clusterName := strings.TrimSpace(attrs["clusterName"])
+        if clusterName == "" {
+            return nil, status.Errorf(codes.InvalidArgument, "Missing clusterName in PV attributes for lustre delete")
+        }
+        if err := reqService.DeleteVolume("lustre", clusterName, volumeId, volumeId); err != nil {
+            return nil, status.Errorf(codes.Internal,
+                fmt.Sprintf("Failed to DeleteVolume(%s), err: %v", volumeId, err))
+        }
+        return &csi.DeleteVolumeResponse{}, nil
+    }
+
+    if err := reqService.DeleteVolume("zfs", poolName, webapi.ZfsNfsShareName, volumeId); err != nil {
         return nil, status.Errorf(codes.Internal,
             fmt.Sprintf("Failed to DeleteVolume(%s), err: %v", volumeId, err))
     }
@@ -397,36 +361,12 @@ func (cs *ControllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
         return nil, status.Error(codes.InvalidArgument, "No volume capabilities are provided")
     }
 
-    if isLustreVolumeID(volumeId) {
-        attrs, ok := cs.lookupPVAttributesByVolumeHandle(ctx, volumeId)
-        if !ok {
-            return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
-        }
-        clusterName := attrs["clusterName"]
-        lustreVol, ok := lustreVolNameFromVolumeID(volumeId)
-        if !ok || clusterName == "" {
-            return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
-        }
-
-        proxy, ok := proxyFromVolumeAttributes(attrs)
-        if !ok {
-            proxyProfile := strings.TrimSpace(attrs[volAttrProxyProfile])
-            p, err := cs.Driver.SelectProxy(proxyProfile)
-            if err != nil {
-                return nil, status.Errorf(codes.InvalidArgument, "%v", err)
-            }
-            proxy = p
-        }
-        reqService := service.NewFlexAService()
-        reqService.SetFep(proxy)
-
-        if reqService.GetVolume(clusterName, lustreVol) == nil {
-            return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
-        }
-        return &csi.ValidateVolumeCapabilitiesResponse{}, nil
+    attrs, ok := cs.lookupPVAttributesByVolumeHandle(ctx, volumeId)
+    if !ok {
+        return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
     }
 
-    attrs, _ := cs.lookupPVAttributesByVolumeHandle(ctx, volumeId)
+    fs := volumeFsFromAttrs(attrs)
     poolName := cs.Driver.PoolName
     if attrs != nil {
         if p := strings.TrimSpace(attrs["poolName"]); p != "" {
@@ -449,10 +389,20 @@ func (cs *ControllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
     reqService := service.NewFlexAService()
     reqService.SetFep(proxy)
 
-    if reqService.GetVolume(poolName, volumeId) == nil {
-        return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
+    if fs == "lustre" {
+        clusterName := strings.TrimSpace(attrs["clusterName"])
+        if clusterName == "" {
+            return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
+        }
+        if reqService.GetVolume("lustre", clusterName, volumeId) == nil {
+            return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
+        }
+        return &csi.ValidateVolumeCapabilitiesResponse{}, nil
     }
 
+    if reqService.GetVolume("zfs", poolName, volumeId) == nil {
+        return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
+    }
 
     return &csi.ValidateVolumeCapabilitiesResponse{}, nil
 }
@@ -516,14 +466,7 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
         return nil, status.Errorf(codes.NotFound, "PV attributes not found for volumeHandle=%s", volumeId)
     }
 
-    fs := strings.TrimSpace(attrs["fs"])
-    if fs == "" {
-        if isLustreVolumeID(volumeId) {
-            fs = "lustre"
-        } else {
-            fs = "zfs"
-        }
-    }
+    fs := volumeFsFromAttrs(attrs)
 
     // Resolve proxy: explicit attrs -> proxyProfile -> legacy default.
     proxy, ok := proxyFromVolumeAttributes(attrs)
@@ -549,15 +492,9 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
         if poolOrCluster == "" {
             return nil, status.Error(codes.InvalidArgument, "Missing clusterName in PV attributes")
         }
-        v, ok := lustreVolNameFromVolumeID(volumeId)
-        if !ok {
-            return nil, status.Error(codes.InvalidArgument, "Invalid lustre volumeId")
-        }
-        backendVolName = v
+        backendVolName = volumeId
 
-        // Lustre info path exists; size may not be provided in current driver responses (often 0).
-        // We still rely on proxy to reject invalid downsizes, but try to guard when possible.
-        if info := reqService.GetVolume(poolOrCluster, backendVolName); info != nil {
+        if info := reqService.GetVolume(fs, poolOrCluster, backendVolName); info != nil {
             currentSizeBytes = info.Size
         }
     } else {
@@ -565,8 +502,8 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
         if poolOrCluster == "" {
             return nil, status.Error(codes.InvalidArgument, "Missing poolName in PV attributes")
         }
-        backendVolName = models.GenVolumeName(volumeId)
-        if info := reqService.GetVolume(poolOrCluster, backendVolName); info != nil {
+        backendVolName = volumeId
+        if info := reqService.GetVolume(fs, poolOrCluster, backendVolName); info != nil {
             currentSizeBytes = info.Size
         }
     }
@@ -585,7 +522,7 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 
     // Fetch updated size when possible, otherwise return requested size.
     capBytes := newSizeBytes
-    if info := reqService.GetVolume(poolOrCluster, backendVolName); info != nil && info.Size > 0 {
+    if info := reqService.GetVolume(fs, poolOrCluster, backendVolName); info != nil && info.Size > 0 {
         capBytes = info.Size
     }
     if currentSizeBytes > 0 && capBytes < currentSizeBytes {

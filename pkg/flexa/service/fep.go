@@ -151,9 +151,12 @@ func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*model
 }
 
 
-func (service *FlexAService) DeleteVolume(poolName string, shareName string, volName string) error {
-    // lustre: poolName is clusterName, shareName == volName
-    if shareName == volName && !strings.HasPrefix(volName, "k8s-csi-") {
+func (service *FlexAService) DeleteVolume(fs string, poolName string, shareName string, volName string) error {
+    fs = strings.TrimSpace(fs)
+    if fs == "" {
+        fs = "zfs"
+    }
+    if fs == "lustre" {
         err := service.fep.LustreDeleteVolume(poolName, volName)
         if err != nil {
             log.Errorf("FlexA Call(DeleteVolume) : Fail Delete Lustre Volume(%s)", volName)
@@ -229,15 +232,25 @@ func (service *FlexAService) volumeInfo(poolName string, volName string) (webapi
 }
 
 
-func (service *FlexAService) GetVolume(poolName string, volName string)  *models.K8sVolumeRespSpec {
+func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName string) *models.K8sVolumeRespSpec {
     refForVip := service.fep.VipResolveRefIP()
     if refForVip == "" {
         return nil
     }
 
-    // ZFS backing volume name pattern: k8s-csi-<id>
-    if !strings.HasPrefix(volName, "k8s-csi-") {
-        info, err := service.fep.LustreInfoVolume(poolName, volName)
+    fs = strings.TrimSpace(fs)
+    if fs == "" {
+        fs = "zfs"
+    }
+
+    if fs == "lustre" {
+        clusterName := strings.TrimSpace(poolOrCluster)
+        v := strings.TrimSpace(volName)
+        if clusterName == "" || v == "" {
+            log.Errorf("FlexA Call(GetVolume): empty clusterName or volName for lustre")
+            return nil
+        }
+        info, err := service.fep.LustreInfoVolume(clusterName, v)
         if err != nil {
             return nil
         }
@@ -246,20 +259,25 @@ func (service *FlexAService) GetVolume(poolName string, volName string)  *models
             log.Errorf("FlexA Call(GetVolume) : Lustre VIP resolve failed: %v", err)
             return nil
         }
-        // Lustre API returns quota in MB (quota.limitMb). Convert to bytes when available.
         sizeBytes := int64(0)
         if info.Quota.LimitMb > 0 {
             sizeBytes = info.Quota.LimitMb * utils.UNIT_MB
         }
         return &models.K8sVolumeRespSpec{
             Vip:        vip,
-            VolumeId:   volName,
+            VolumeId:   v,
             PoolName:   "",
             VolumeName: info.VolName,
             Size:       sizeBytes,
             Fs:         "lustre",
             BaseDir:    info.Path,
         }
+    }
+
+    poolName := strings.TrimSpace(poolOrCluster)
+    if poolName == "" {
+        log.Errorf("FlexA Call(GetVolume): empty poolName for ZFS volume %q", volName)
+        return nil
     }
 
     vols, err := service.ListVolumes(poolName)
@@ -271,10 +289,8 @@ func (service *FlexAService) GetVolume(poolName string, volName string)  *models
 
     for _, vol := range vols {
         if vol == volName {
-            volInfo, err := service.volumeInfo(poolName,volName)
-            fmt.Println(volInfo)
-            if err != nil{
-                fmt.Println(err)
+            volInfo, err := service.volumeInfo(poolName, volName)
+            if err != nil {
                 return nil
             }
 

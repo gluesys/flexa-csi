@@ -5,9 +5,11 @@ import (
     "net/url"
 
     "github.com/gluesys/flexa-csi/pkg/utils"
-    "github.com/gluesys/flexa-csi/pkg/models"
     log "github.com/sirupsen/logrus"
 )
+
+// ZfsNfsShareName is the fixed share name segment for NFS export paths (per CSI driver convention).
+const ZfsNfsShareName = "share"
 
 type ZfsPoolList struct {
     PoolList     []string   `json:"poolList"`
@@ -162,12 +164,12 @@ func (fep *FEP) ZfsCreateShareNfs(volId string, volName string, poolName string,
     params.Set("optionInsecure",optionInsecure)
 
 
-    // 공유 생성 API 호출
-    shareName := models.GenShareName(volId)
-    sharePath := fmt.Sprintf("/%s/%s/%s", poolName,volName,volId)
-    params.Set("path",sharePath)
+    // 공유 생성 API 호출 — share name is fixed "share" (volume id = volName, no extra prefix).
+    shareName := ZfsNfsShareName
+    sharePath := fmt.Sprintf("/%s/%s/%s", poolName, volName, shareName)
+    params.Set("path", sharePath)
 
-    cgiPath := fmt.Sprintf("share/pool/%s/volume/%s/%s/create",poolName, volName, shareName)
+    cgiPath := fmt.Sprintf("share/pool/%s/volume/%s/%s/create", poolName, volName, shareName)
 
     type respCreateShareSpec struct {
         ShareName       string `json:"shareName"`

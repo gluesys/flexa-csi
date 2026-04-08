@@ -571,7 +571,8 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
             poolName = p
         }
     }
-    volumeName := models.GenVolumeName(volumeId)
+
+    fs := volumeFsFromAttrs(attrs)
 
     proxy, ok := proxyFromVolumeAttributes(attrs)
     if !ok {
@@ -588,17 +589,35 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
     reqService := service.NewFlexAService()
     reqService.SetFep(proxy)
 
-    k8sVolume := reqService.GetVolume(poolName, volumeName)
+    statLabel := volumeId
+    var k8sVolume *models.K8sVolumeRespSpec
+    if fs == "lustre" {
+        clusterName := ""
+        if attrs != nil {
+            clusterName = strings.TrimSpace(attrs["clusterName"])
+        }
+        if clusterName == "" {
+            return nil, status.Error(codes.InvalidArgument,
+                "lustre volume requires clusterName in PV volumeAttributes")
+        }
+        k8sVolume = reqService.GetVolume("lustre", clusterName, volumeId)
+    } else {
+        if strings.TrimSpace(poolName) == "" {
+            return nil, status.Error(codes.InvalidArgument,
+                "ZFS volume requires poolName in PV volumeAttributes; node default pool is unset")
+        }
+        k8sVolume = reqService.GetVolume("zfs", poolName, volumeId)
+    }
 
     if k8sVolume == nil {
         return nil, status.Error(codes.NotFound,
-                fmt.Sprintf("Volume[%s] is not found", volumeName))
+            fmt.Sprintf("Volume[%s] is not found", statLabel))
     }
 
     notMount, err := mount.IsNotMountPoint(ns.Mounter.Interface, volumePath)
     if err != nil || notMount {
         return nil, status.Error(codes.NotFound,
-                fmt.Sprintf("Volume[%s] does not exist on the %s", volumeName, volumePath))
+            fmt.Sprintf("Volume[%s] does not exist on the %s", statLabel, volumePath))
     }
 
     return &csi.NodeGetVolumeStatsResponse{
