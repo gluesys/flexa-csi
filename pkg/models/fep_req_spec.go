@@ -74,3 +74,10 @@ type MountData struct {
     Mountpoint  string
     Opts        string
 }
+
+type LustreVolMeta struct {
+    VolumeId     string
+    Source       string   // mgsNid:/clusterName/volName
+    StagingPath  string
+    MountOptions []string
+}

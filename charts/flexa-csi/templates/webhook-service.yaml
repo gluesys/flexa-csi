@@ -1,0 +1,19 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flexa-csi.fullname" . }}-webhook
+  namespace: {{ include "flexa-csi.namespace" . }}
+  labels:
+    {{- include "flexa-csi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  ports:
+    - port: 443
+      targetPort: {{ .Values.webhook.port | default 8443 }}
+      protocol: TCP
+      name: https
+  selector:
+    {{- include "flexa-csi.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+{{- end }}

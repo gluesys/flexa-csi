@@ -20,6 +20,7 @@ import (
     "context"
     "fmt"
     "os"
+    "os/exec"
     "bufio"
     "encoding/json"
     "encoding/base64"
@@ -28,21 +29,18 @@ import (
     "sort"
     "slices"
 
-    //"github.com/cenkalti/backoff/v4"
     "github.com/container-storage-interface/spec/lib/go/csi"
     log "github.com/sirupsen/logrus"
     "google.golang.org/grpc/codes"
     "google.golang.org/grpc/status"
-    //"golang.org/x/sys/unix"
     "k8s.io/mount-utils"
     clientset "k8s.io/client-go/kubernetes"
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-    //"csi/pkg/flexa/webapi"
     "github.com/gluesys/flexa-csi/pkg/flexa/service"
+    "github.com/gluesys/flexa-csi/pkg/flexa/webapi"
     "github.com/gluesys/flexa-csi/pkg/interfaces"
     "github.com/gluesys/flexa-csi/pkg/models"
-    //"github.com/gluesys/flexa-csi/pkg/utils"
 )
 
 type NodeServer struct {
@@ -332,18 +330,179 @@ func(ns *NodeServer) mountNfsGroup(mount mount.Interface, source string, staging
 
 
 
-func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+func lustreMountViaHost(source, target string, options []string) error {
+    args := []string{"--target", "1", "--mount", "--", "mount", "-t", "lustre"}
+    for _, o := range options {
+        args = append(args, "-o", o)
+    }
+    args = append(args, source, target)
 
+    log.Infof("lustreMountViaHost: nsenter %v", args)
+    cmd := exec.Command("nsenter", args...)
+    output, err := cmd.CombinedOutput()
+    if err != nil {
+        return fmt.Errorf("nsenter lustre mount failed: %s: %w", strings.TrimSpace(string(output)), err)
+    }
+    return nil
+}
+
+func lustreUmountViaHost(target string) error {
+    args := []string{"--target", "1", "--mount", "--", "umount", target}
+
+    log.Infof("lustreUmountViaHost: nsenter %v", args)
+    cmd := exec.Command("nsenter", args...)
+    output, err := cmd.CombinedOutput()
+    if err != nil {
+        return fmt.Errorf("nsenter lustre umount failed: %s: %w", strings.TrimSpace(string(output)), err)
+    }
+    return nil
+}
+
+func (ns *NodeServer) resolveProxyFEP(volCtx map[string]string) (*webapi.FEP, error) {
+    proxy, ok := proxyFromVolumeAttributes(volCtx)
+    if !ok {
+        proxyProfile := strings.TrimSpace(volCtx[volAttrProxyProfile])
+        p, err := ns.Driver.SelectProxy(proxyProfile)
+        if err != nil {
+            return nil, err
+        }
+        proxy = p
+    }
+    return &webapi.FEP{Ip: proxy.Host, Port: proxy.Port, MountIP: proxy.MountIP}, nil
+}
+
+func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+    protocol := req.VolumeContext["protocol"]
+    if protocol != "lustre" {
+        return &csi.NodeStageVolumeResponse{}, nil
+    }
+
+    volumeId := req.GetVolumeId()
+    stagingPath := req.GetStagingTargetPath()
+    clusterName := req.VolumeContext["clusterName"]
+
+    if volumeId == "" {
+        return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
+    }
+    if stagingPath == "" {
+        return nil, status.Error(codes.InvalidArgument, "Staging target path missing in request")
+    }
+    if clusterName == "" {
+        return nil, status.Error(codes.InvalidArgument, "clusterName missing in volume context for Lustre mount")
+    }
+
+    notMount, err := ns.Mounter.Interface.IsLikelyNotMountPoint(stagingPath)
+    if err != nil {
+        if os.IsNotExist(err) {
+            if mkErr := os.MkdirAll(stagingPath, 0750); mkErr != nil {
+                return nil, status.Errorf(codes.Internal, "failed to create staging path %s: %v", stagingPath, mkErr)
+            }
+            notMount = true
+        } else {
+            return nil, status.Errorf(codes.Internal, "failed to check mount point %s: %v", stagingPath, err)
+        }
+    }
+    if !notMount {
+        log.Infof("NodeStageVolume: %s is already mounted, skipping", stagingPath)
+        return &csi.NodeStageVolumeResponse{}, nil
+    }
+
+    fep, err := ns.resolveProxyFEP(req.VolumeContext)
+    if err != nil {
+        return nil, status.Errorf(codes.Internal, "failed to resolve proxy: %v", err)
+    }
+
+    nids, err := fep.LustreMgsNid()
+    if err != nil {
+        return nil, status.Errorf(codes.Internal, "failed to get MGS NID: %v", err)
+    }
+
+    mgsSpec := strings.Join(nids, ":")
+    source := fmt.Sprintf("%s:/%s/%s", mgsSpec, clusterName, volumeId)
+
+    log.Infof("NodeStageVolume: mounting Lustre source(%s) on stagingPath(%s)", source, stagingPath)
+    if err := lustreMountViaHost(source, stagingPath, nil); err != nil {
+        return nil, status.Errorf(codes.Internal, "Lustre mount failed: source=%s target=%s err=%v", source, stagingPath, err)
+    }
+
+    log.Infof("NodeStageVolume: Lustre mount succeeded source(%s) stagingPath(%s)", source, stagingPath)
     return &csi.NodeStageVolumeResponse{}, nil
 }
 
 func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+    stagingPath := req.GetStagingTargetPath()
+    if stagingPath == "" {
+        return nil, status.Error(codes.InvalidArgument, "Staging target path missing in request")
+    }
 
+    notMount, err := mount.IsNotMountPoint(ns.Mounter.Interface, stagingPath)
+    if err != nil {
+        if os.IsNotExist(err) {
+            return &csi.NodeUnstageVolumeResponse{}, nil
+        }
+        return nil, status.Errorf(codes.Internal, "failed to check mount point %s: %v", stagingPath, err)
+    }
+    if notMount {
+        return &csi.NodeUnstageVolumeResponse{}, nil
+    }
 
+    log.Infof("NodeUnstageVolume: unmounting stagingPath(%s)", stagingPath)
+    if err := lustreUmountViaHost(stagingPath); err != nil {
+        return nil, status.Errorf(codes.Internal, "failed to unmount staging path %s: %v", stagingPath, err)
+    }
+
+    if err := os.RemoveAll(stagingPath); err != nil {
+        log.Debugf("NodeUnstageVolume: failed to remove staging path %s: %v", stagingPath, err)
+    }
+
+    log.Infof("NodeUnstageVolume: successfully unmounted stagingPath(%s)", stagingPath)
     return &csi.NodeUnstageVolumeResponse{}, nil
 }
 
+func (ns *NodeServer) nodePublishLustre(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+    stagingPath := req.GetStagingTargetPath()
+    targetPath := req.GetTargetPath()
+    volumeId := req.GetVolumeId()
+
+    if volumeId == "" || targetPath == "" || stagingPath == "" {
+        return nil, status.Error(codes.InvalidArgument,
+            "InvalidArgument: Please check volume ID, target path and staging path.")
+    }
+
+    log.Infof("NodePublishVolume[lustre]: volumeId(%s) stagingPath(%s) targetPath(%s)", volumeId, stagingPath, targetPath)
+
+    notMount, err := createTargetMountPath(ns.Mounter.Interface, targetPath, false)
+    if err != nil {
+        return nil, status.Errorf(codes.Internal, "failed to create target path: %v", err)
+    }
+    if !notMount {
+        return &csi.NodePublishVolumeResponse{}, nil
+    }
+
+    readonly := req.GetReadonly()
+
+    bindOptions := []string{"bind", "rprivate"}
+    if err = ns.Mounter.Interface.Mount(stagingPath, targetPath, "", bindOptions); err != nil {
+        return nil, status.Errorf(codes.Internal, "Lustre bind mount failed: %v", err)
+    }
+
+    if readonly {
+        if err := ns.Mounter.Interface.Mount(targetPath, targetPath, "", []string{"remount", "ro"}); err != nil {
+            return nil, status.Errorf(codes.Internal, "Lustre readonly remount failed: %v", err)
+        }
+        log.Infof("NodePublishVolume[lustre]: readonly remount succeeded (%s)", targetPath)
+    }
+
+    log.Infof("NodePublishVolume[lustre]: bind mount succeeded (%s) -> (%s)", stagingPath, targetPath)
+    return &csi.NodePublishVolumeResponse{}, nil
+}
+
 func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+    protocol := req.VolumeContext["protocol"]
+    if protocol == "lustre" {
+        return ns.nodePublishLustre(ctx, req)
+    }
+
     volumeId, targetPath := req.GetVolumeId(), req.GetTargetPath()
 
     if pool, ok := req.VolumeContext["poolName"]; ok && pool != "" {
@@ -365,7 +524,6 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
         return nil, status.Error(codes.Internal, err.Error())
     }
 
-    // Prefer pod annotation flexa.io/serviceVIP; if unset, use controller-provisioned VIP from VolumeContext.
     if strings.TrimSpace(svip) == "" {
         if v := req.VolumeContext["vip"]; v != "" {
             svip = v
@@ -388,13 +546,11 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 
     log.Infof("PVC(%s), Mount Options(%v)",pvcName, stagingOptions)
 
-    //Mount Global Group Path(groupOptions)
     err = ns.mountNfsGroup(ns.Mounter.Interface, source, stagingGroupPath, stagingOptions)
     if err != nil {
         return nil, status.Error(codes.Internal, err.Error())
     }
 
-    //Volume Meta Data Save
     err = ns.saveNfsVolMeta(volumeId,targetPath,stagingGroupPath,source,stagingOptions)
     if err != nil {
         return nil, status.Error(codes.Internal, err.Error())
@@ -412,8 +568,6 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
         return &csi.NodePublishVolumeResponse{}, nil
     }
 
-
-    //fsType := req.GetVolumeCapability().GetMount().GetFsType()
     var bindOptions []string
 
     readonly := slices.Contains(stagingOptions,"ro")
@@ -462,10 +616,9 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 
     volumeId, targetPath := req.GetVolumeId(), req.GetTargetPath()
 
-    if req.GetVolumeId() == "" {
+    if volumeId == "" {
         return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
     }
-
 
     if targetPath == "" {
         return nil, status.Error(codes.InvalidArgument, "target path missing in request")
@@ -479,20 +632,30 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
     }
 
     notMount, err := mount.IsNotMountPoint(ns.Mounter.Interface, targetPath)
-
     if err != nil {
         return nil, status.Error(codes.Internal, err.Error())
     }
-
     if notMount {
         return &csi.NodeUnpublishVolumeResponse{}, nil
     }
 
-    nfsVolMeta, err := ns.loadNfsVolMeta(volumeId, targetPath)
-    if err != nil {
-        return nil, status.Errorf(codes.Internal, err.Error())
+    nfsVolMeta, nfsMetaErr := ns.loadNfsVolMeta(volumeId, targetPath)
+    if nfsMetaErr != nil {
+        // No NFS meta -> Lustre volume: bind unmount only (Stage handles the actual Lustre mount)
+        log.Infof("NodeUnpublishVolume[lustre]: unmounting bind target(%s)", targetPath)
+
+        if err := ns.Mounter.Interface.Unmount(targetPath); err != nil {
+            return nil, status.Errorf(codes.Internal, "failed to unmount target path %s: %v", targetPath, err)
+        }
+        if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+            log.Debugf("NodeUnpublishVolume[lustre]: failed to remove target path %s: %v", targetPath, err)
+        }
+
+        log.Infof("NodeUnpublishVolume[lustre]: bind unmount succeeded (%s)", targetPath)
+        return &csi.NodeUnpublishVolumeResponse{}, nil
     }
 
+    // NFS path: existing logic
     stagingGroupPath := nfsVolMeta.StagingGroupPath
     log.Debugf("NodeServer : stagingGroupPath(%s)",stagingGroupPath)
 
@@ -511,7 +674,6 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
     if err := ns.deleteNfsVolMeta(volumeId, targetPath); err != nil {
         log.Debugf("NodeServer : Delete Fail %s meta file",volumeId)
     }
-
 
     bindCount, err := ns.countBindMounts(stagingGroupPath, nfsVolMeta.Source, nfsVolMeta.MountOptions)
     if err != nil {
@@ -536,10 +698,7 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
         if err := os.RemoveAll(stagingGroupPath); err != nil {
             log.Debugf("NodeServer : Delete Fail %s group mount path", stagingGroupPath)
         }
-
     }
-
-
 
     return &csi.NodeUnpublishVolumeResponse{}, nil
 }

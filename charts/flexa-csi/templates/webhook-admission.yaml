@@ -1,0 +1,63 @@
+{{- if .Values.webhook.enabled }}
+{{- $fullname := include "flexa-csi.fullname" . }}
+{{- $ns := include "flexa-csi.namespace" . }}
+{{- /* Auto-generate TLS when not using cert-manager and user did not supply an existing Secret name */}}
+{{- $autoTLS := and (not .Values.webhook.certManager) (empty (default "" .Values.webhook.certSecret)) }}
+{{- $tlsStore := dict }}
+{{- if $autoTLS }}
+{{- $dns1 := printf "%s-webhook.%s.svc" $fullname $ns }}
+{{- $dns2 := printf "%s-webhook.%s.svc.cluster.local" $fullname $ns }}
+{{- $gen := genSelfSignedCert $dns1 nil (list $dns1 $dns2) 3650 }}
+{{- $_ := set $tlsStore "cert" $gen }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $fullname }}-webhook-certs
+  namespace: {{ $ns }}
+  labels:
+    {{- include "flexa-csi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $gen.Cert | b64enc }}
+  tls.key: {{ $gen.Key | b64enc }}
+{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ $fullname }}-lustre-jobid
+  labels:
+    {{- include "flexa-csi.labels" . | nindent 4 }}
+  {{- if .Values.webhook.certManager }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ $ns }}/{{ $fullname }}-webhook-cert
+  {{- end }}
+webhooks:
+  - name: lustre-jobid.flexa.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy | default "Ignore" }}
+    clientConfig:
+      service:
+        name: {{ $fullname }}-webhook
+        namespace: {{ $ns }}
+        path: /mutate
+      {{- if not .Values.webhook.certManager }}
+      caBundle: {{ if $autoTLS }}{{ (index $tlsStore "cert").Cert | b64enc | quote }}{{ else }}{{ .Values.webhook.caBundle | default "" | quote }}{{ end }}
+      {{- end }}
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - kube-public
+            - {{ $ns }}
+{{- end }}

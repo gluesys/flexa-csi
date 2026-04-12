@@ -1,6 +1,6 @@
 apiVersion: v2
 name: flexa-csi
-description: FlexA CSI driver for Kubernetes
+description: Gluesys FlexA CSI driver for Kubernetes
 type: application
 version: 0.1.0
 appVersion: "1.0.0"

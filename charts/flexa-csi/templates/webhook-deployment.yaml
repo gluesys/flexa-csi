@@ -1,0 +1,62 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flexa-csi.fullname" . }}-webhook
+  namespace: {{ include "flexa-csi.namespace" . }}
+  labels:
+    {{- include "flexa-csi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  replicas: {{ .Values.webhook.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "flexa-csi.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: webhook
+  template:
+    metadata:
+      labels:
+        {{- include "flexa-csi.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: webhook
+    spec:
+      serviceAccountName: {{ include "flexa-csi.fullname" . }}-node-sa
+      containers:
+        - name: webhook
+          image: "{{ .Values.webhook.image.repository }}:{{ .Values.webhook.image.tag | default .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.webhook.image.pullPolicy | default "IfNotPresent" }}
+          args:
+            - --mode=webhook
+            - --tls-cert=/certs/tls.crt
+            - --tls-key=/certs/tls.key
+            - --listen-addr=:{{ .Values.webhook.port | default 8443 }}
+          ports:
+            - name: https
+              containerPort: {{ .Values.webhook.port | default 8443 }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /certs
+              readOnly: true
+          {{- with .Values.webhook.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: {{ .Values.webhook.certSecret | default (printf "%s-webhook-certs" (include "flexa-csi.fullname" .)) }}
+{{- end }}

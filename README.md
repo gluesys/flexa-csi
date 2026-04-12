@@ -1,6 +1,6 @@
-# FlexA CSI Driver for Kubernetes
+# Gluesys FlexA CSI Driver for Kubernetes
 
-The official [Container Storage Interface](https://github.com/container-storage-interface) driver for FlexA Storage.
+The official [Container Storage Interface](https://github.com/container-storage-interface) driver for Gluesys FlexA storage (FlexStor, ExaStor).
 
 ### Container Images & Kubernetes Compatibility
 
@@ -10,7 +10,7 @@ Driver Name: `csi.flexa.com`
 | -------------- | ----- | --------------------- |
 | [1.0.0](https://github.com/gluesys/flexa-csi) | `ghcr.io/gluesys/flexa-csi:1.0.0` | 1.21+ |
 
-The FlexA CSI driver supports:
+The Gluesys FlexA CSI driver supports:
 
 - **Access modes (CSI):** `SINGLE_NODE_WRITER`, `MULTI_NODE_MULTI_WRITER` (typical Kubernetes mapping: RWO and RWX-style multi-writer NFS where applicable).
 - **Controller:** Create/Delete volume, List volumes, Get capacity.
@@ -21,12 +21,12 @@ The FlexA CSI driver supports:
 ## Prerequisites
 
 - Kubernetes 1.21 or above
-- FlexA Storage (**FlexStor**, **ExaStor**) **1.4.2 or above**, with at least one storage pool for ZFS-backed volumes, or Lustre cluster configuration as required by your deployment
+- Gluesys FlexA storage (**FlexStor**, **ExaStor**) **1.4.2 or above**, with at least one storage pool for ZFS-backed volumes, or Lustre cluster configuration as required by your deployment
 - Go 1.21+ recommended when building from source
 
 ### Before you install
 
-1. For ZFS workflows, create and initialize at least one **storage pool** on FlexA Storage.
+1. For ZFS workflows, create and initialize at least one **storage pool** on Gluesys FlexA storage.
 2. Deploy the driver using **Helm** (recommended) or **raw manifests** (`deploy/kubernetes`) as described in [Installation](#installation).
 
 ## Installation
@@ -152,7 +152,7 @@ allowVolumeExpansion: true
 | Name | Required | Description |
 | ---- | -------- | ----------- |
 | *fs* | Yes | `zfs` or `lustre`. |
-| *poolName* | For `fs=zfs` | ZFS pool name on FlexA. |
+| *poolName* | For `fs=zfs` | ZFS pool name on Gluesys FlexA storage. |
 | *clusterName* | For `fs=lustre` | Lustre cluster name. |
 | *protocol* | Typically set | e.g. `nfs`. |
 | *proxyProfile* | Optional | Profile name under `profiles` in `client-info`. When set, the driver uses that profile’s `proxyIP`, `proxyPort`, and `mountIP`. |
@@ -181,7 +181,7 @@ The controller reads **PersistentVolumeClaim** annotations with the `flexa.io/` 
 | `flexa.io/nfsNoRootSquashing` | NFS root squashing. |
 | `flexa.io/nfsInsecure` | NFS insecure port. |
 
-Use values such as `"on"` / `"off"` or addresses as in the samples; follow FlexA documentation for your environment.
+Use values such as `"on"` / `"off"` or addresses as in the samples; follow Gluesys FlexA documentation for your environment.
 
 ### Pod annotations
 
@@ -211,4 +211,4 @@ By default the cluster pulls `ghcr.io/gluesys/flexa-csi` from GHCR. For a locall
 - **Helm:** `helm uninstall flexa-csi -n flexa-csi` (use `helm list -n flexa-csi` if the release name differs).
 - **Raw manifests:** From `deploy/kubernetes`, run `sh cleanup.sh` (review the script if you customized StorageClass names).
 
-Ensure no workloads still depend on FlexA volumes. PVCs, PVs, and backend volumes may remain depending on `reclaimPolicy` and storage behavior; delete or retain them according to your operations policy.
+Ensure no workloads still depend on Gluesys FlexA volumes. PVCs, PVs, and backend volumes may remain depending on `reclaimPolicy` and storage behavior; delete or retain them according to your operations policy.

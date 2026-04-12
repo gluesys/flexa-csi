@@ -26,6 +26,7 @@ spec:
     spec:
       serviceAccountName: {{ include "flexa-csi.fullname" . }}-node-sa
       hostNetwork: {{ .Values.node.hostNetwork }}
+      hostPID: {{ .Values.node.hostPID }}
       {{- with .Values.node.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

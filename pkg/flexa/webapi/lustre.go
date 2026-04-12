@@ -91,6 +91,24 @@ func (fep *FEP) LustreInfoVolume(clusterName string, volName string) (LustreVolu
 	return output, nil
 }
 
+type LustreMgsNidResponse struct {
+	NidList []string `json:"nidList"`
+}
+
+func (fep *FEP) LustreMgsNid() ([]string, error) {
+	cgiPath := "lustre/cluster/mgs/nid"
+	var output LustreMgsNidResponse
+	_, err := fep.sendRequest("", &output, url.Values{}, cgiPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get MGS NID list: %w", err)
+	}
+	if len(output.NidList) == 0 {
+		return nil, fmt.Errorf("no MGS NID available from proxy")
+	}
+	log.Infof("Gluesys FlexA Call(LustreMgsNid) : nidList=%v", output.NidList)
+	return output.NidList, nil
+}
+
 func (fep *FEP) LustreExpandVolume(clusterName string, volName string, newSizeBytes int64) error {
 	if clusterName == "" || volName == "" {
 		return fmt.Errorf("clusterName and volName are required")

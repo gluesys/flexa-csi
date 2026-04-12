@@ -2,6 +2,8 @@
 
 FROM alpine:latest
 
+RUN apk add --no-cache util-linux nfs-utils
+
 WORKDIR /root
 
 COPY ./bin/flexa-csi-driver /bin/flexa-csi-driver

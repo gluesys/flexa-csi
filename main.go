@@ -5,9 +5,11 @@
 package main
 
 import (
+    "fmt"
     "os"
     "os/signal"
     "syscall"
+
     "github.com/spf13/cobra"
     log "github.com/sirupsen/logrus"
 
@@ -15,6 +17,7 @@ import (
     "github.com/gluesys/flexa-csi/pkg/flexa/common"
     "github.com/gluesys/flexa-csi/pkg/flexa/service"
     "github.com/gluesys/flexa-csi/pkg/logger"
+    "github.com/gluesys/flexa-csi/pkg/webhook"
 )
 
 var (
@@ -22,6 +25,11 @@ var (
     csiNodeID         = "CSINode"
     csiEndpoint       = "unix:///var/lib/kubelet/plugins/" + driver.DriverName + "/csi.sock"
     csiClientInfoPath = "/etc/flexa/client-info.yml"
+    // runMode: "csi" (default) or "webhook" (mutating admission HTTP server)
+    runMode    = "csi"
+    tlsCertPath = ""
+    tlsKeyPath  = ""
+    listenAddr  = ":8443"
     // Logging
     logLevel    = "info"
     webapiDebug = false
@@ -39,8 +47,23 @@ var rootCmd = &cobra.Command{
         }
         logger.Init(logLevel)
 
+        if runMode == "webhook" {
+            if tlsCertPath == "" || tlsKeyPath == "" {
+                return fmt.Errorf("webhook mode requires --tls-cert and --tls-key")
+            }
+            log.Infof("Webhook mode: listen=%s cert=%s key=%s", listenAddr, tlsCertPath, tlsKeyPath)
+            return webhook.StartWebhookServer(tlsCertPath, tlsKeyPath, listenAddr)
+        }
+
         if !multipathForUC {
             driver.MultipathEnabled = false
+        }
+
+        if csiEndpoint == "" {
+            return fmt.Errorf("CSI mode requires --endpoint")
+        }
+        if csiClientInfoPath == "" {
+            return fmt.Errorf("CSI mode requires --client-info")
         }
 
         err := driverStart()
@@ -94,6 +117,10 @@ func main() {
 }
 
 func addFlags(cmd *cobra.Command) {
+    cmd.PersistentFlags().StringVar(&runMode, "mode", runMode, "Run mode: csi (default) or webhook")
+    cmd.PersistentFlags().StringVar(&tlsCertPath, "tls-cert", tlsCertPath, "Path to TLS certificate (webhook mode)")
+    cmd.PersistentFlags().StringVar(&tlsKeyPath, "tls-key", tlsKeyPath, "Path to TLS private key (webhook mode)")
+    cmd.PersistentFlags().StringVar(&listenAddr, "listen-addr", listenAddr, "Listen address for webhook mode (e.g. :8443)")
     cmd.PersistentFlags().StringVar(&csiNodeID, "nodeid", csiNodeID, "Node ID")
     cmd.PersistentFlags().StringVarP(&csiEndpoint, "endpoint", "e", csiEndpoint, "CSI endpoint")
     cmd.PersistentFlags().StringVarP(&csiClientInfoPath, "client-info", "f", csiClientInfoPath, "Path to Gluesys FlexA client-info YAML (proxy profiles)")
@@ -101,8 +128,6 @@ func addFlags(cmd *cobra.Command) {
     cmd.PersistentFlags().BoolVarP(&webapiDebug, "debug", "d", webapiDebug, "Enable webapi debugging logs")
     cmd.PersistentFlags().BoolVar(&multipathForUC, "multipath", multipathForUC, "Set to 'false' to disable multipath for UC")
 
-    cmd.MarkFlagRequired("endpoint")
-    cmd.MarkFlagRequired("client-info")
     cmd.Flags().SortFlags = false
     cmd.PersistentFlags().SortFlags = false
 }

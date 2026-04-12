@@ -1,4 +1,4 @@
-FlexA CSI has been installed as release "{{ .Release.Name }}" in namespace "{{ include "flexa-csi.namespace" . }}".
+Gluesys FlexA CSI has been installed as release "{{ .Release.Name }}" in namespace "{{ include "flexa-csi.namespace" . }}".
 
 1. Verify pods:
    kubectl get pods -n {{ include "flexa-csi.namespace" . }}
@@ -9,3 +9,7 @@ FlexA CSI has been installed as release "{{ .Release.Name }}" in namespace "{{ i
 {{- end }}
 
 3. Configure StorageClasses in values.yaml (storageClass.*) and create PVCs.
+
+{{- if .Values.webhook.enabled }}
+4. Webhook TLS: {{- if and (not .Values.webhook.certManager) (empty (default "" .Values.webhook.certSecret)) }} chart-generated self-signed Secret {{ include "flexa-csi.fullname" . }}-webhook-certs (rotates on helm upgrade).{{- else if .Values.webhook.certManager }} ensure cert-manager Certificate matches cert-manager.io/inject-ca-from annotation.{{- else }} ensure Secret {{ .Values.webhook.certSecret }} and webhook.caBundle are set.{{- end }}
+{{- end }}
