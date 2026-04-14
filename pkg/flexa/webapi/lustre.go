@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/gluesys/flexa-csi/pkg/utils"
@@ -43,6 +44,7 @@ func (fep *FEP) LustreCreateVolume(
 	access string,
 	optionNoRootSquashing string,
 	optionInsecure string,
+	pvcQos string,
 ) (LustreVolumeCreateResponse, error) {
 	if clusterName == "" || volName == "" {
 		return LustreVolumeCreateResponse{}, fmt.Errorf("clusterName and volName are required")
@@ -60,6 +62,9 @@ func (fep *FEP) LustreCreateVolume(
 		"access":                access,
 		"optionNoRootSquashing": optionNoRootSquashing,
 		"optionInsecure":        optionInsecure,
+	}
+	if s := strings.TrimSpace(pvcQos); s != "" {
+		body["pvcQos"] = s
 	}
 
 	cgiPath := fmt.Sprintf("lustre/cluster/%s/volume/%s/create", clusterName, volName)

@@ -47,6 +47,7 @@ const (
     volAttrProxyIP      = "proxyIP"
     volAttrProxyPort    = "proxyPort"
     volAttrMountIP      = "mountIP"
+    volAttrPvcQos       = "flexa.io/pvcQos"
 )
 
 func proxyFromVolumeAttributes(attrs map[string]string) (*common.ProxyInfo, bool) {
@@ -172,6 +173,8 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
     log.Infof("NFS Secure : Access(%s) NoRootSquashing(%s) Insecure(%s)",nfsAccess,nfsNoRoot,nfsInsecure)
 
+    pvcQos := strings.TrimSpace(pvc.Annotations[volAttrPvcQos])
+    log.Infof("PVC QoS : %s", pvcQos)
 
     if volName == "" {
         return nil, status.Errorf(codes.InvalidArgument, "No name is provided")
@@ -238,6 +241,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
         NfsAccess:        nfsAccess,
         NfsNoRoot:        nfsNoRoot,
         NfsInsecure:      nfsInsecure,
+        PvcQos:           pvcQos,
     }
 
     lookupPool := poolName
@@ -265,24 +269,29 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
     }
 
 
+    volCtx := map[string]string{
+        "vip":                 k8sVolume.Vip,
+        "poolName":            k8sVolume.PoolName,
+        "baseDir":             k8sVolume.BaseDir,
+        "fs":                  fs,
+        "clusterName":         clusterName,
+        "protocol":            params["protocol"],
+        "pvcName":             pvcName,
+        "pvcNS":               pvcNS,
+        volAttrProxyProfile:   proxyProfile,
+        volAttrProxyIP:        proxy.Host,
+        volAttrProxyPort:      fmt.Sprintf("%d", proxy.Port),
+        volAttrMountIP:        proxy.MountIP,
+    }
+    if pvcQos != "" {
+        volCtx[volAttrPvcQos] = pvcQos
+    }
+
     return &csi.CreateVolumeResponse{
         Volume: &csi.Volume{
             VolumeId:      k8sVolume.VolumeId,
             CapacityBytes: k8sVolume.Size,
-            VolumeContext: map[string]string{
-                "vip":              k8sVolume.Vip,
-                "poolName":         k8sVolume.PoolName,
-                "baseDir":          k8sVolume.BaseDir,
-                "fs":               fs,
-                "clusterName":      clusterName,
-                "protocol":         params["protocol"],
-                "pvcName":          pvcName,
-                "pvcNS":            pvcNS,
-                volAttrProxyProfile: proxyProfile,
-                volAttrProxyIP:      proxy.Host,
-                volAttrProxyPort:    fmt.Sprintf("%d", proxy.Port),
-                volAttrMountIP:      proxy.MountIP,
-            },
+            VolumeContext: volCtx,
         },
     }, nil
 }
