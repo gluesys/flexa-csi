@@ -21,6 +21,21 @@ parameters:
   {{- fail (printf "values.storageClass.%s: set poolName (ZFS) or clusterName (Lustre)" $key) }}
 {{- end }}
   protocol: {{ $sc.protocol | quote }}
+{{- with $sc.secureAddress }}
+  secureAddress: {{ . | quote }}
+{{- end }}
+{{- with $sc.secureSubnet }}
+  secureSubnet: {{ . | quote }}
+{{- end }}
+{{- with $sc.nfsAccess }}
+  nfsAccess: {{ . | quote }}
+{{- end }}
+{{- with $sc.nfsNoRootSquashing }}
+  nfsNoRootSquashing: {{ . | quote }}
+{{- end }}
+{{- with $sc.nfsInsecure }}
+  nfsInsecure: {{ . | quote }}
+{{- end }}
 reclaimPolicy: {{ $sc.reclaimPolicy }}
 allowVolumeExpansion: {{ $sc.allowVolumeExpansion }}
 {{- end }}
