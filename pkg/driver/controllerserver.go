@@ -129,6 +129,26 @@ func (cs *ControllerServer) lookupPVAttributesByVolumeHandle(ctx context.Context
     return nil, false
 }
 
+// firstNonEmpty returns the first non-blank value among vals.
+// Used to resolve volume options with the precedence:
+//
+//	PVC annotation  ->  StorageClass parameter  ->  "" (storage-side default)
+//
+// PVC annotations alone are not always settable: UIs that create PVCs on the
+// user's behalf (e.g. Kubeflow "New Volume") offer no way to attach arbitrary
+// annotations, so required fields such as secureAddress/secureSubnet arrived
+// empty and CreateVolume failed. Falling back to StorageClass parameters lets
+// an administrator set cluster-wide defaults once, while a PVC annotation can
+// still override them per volume.
+func firstNonEmpty(vals ...string) string {
+    for _, v := range vals {
+        if s := strings.TrimSpace(v); s != "" {
+            return s
+        }
+    }
+    return ""
+}
+
 func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
     sizeInByte, err := getSizeByCapacityRange(req.GetCapacityRange())
     volName, volCap := req.GetName(), req.GetVolumeCapabilities()
@@ -160,16 +180,16 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
     var secureName, secureAddr, secureSub string
 
     secureName = fmt.Sprintf("zone_%s",pvcName)
-    secureAddr = pvc.Annotations["flexa.io/secureAddress"]
-    secureSub = pvc.Annotations["flexa.io/secureSubnet"]
+    secureAddr = firstNonEmpty(pvc.Annotations["flexa.io/secureAddress"], req.Parameters["secureAddress"])
+    secureSub = firstNonEmpty(pvc.Annotations["flexa.io/secureSubnet"], req.Parameters["secureSubnet"])
 
     log.Infof("Share Secure Zone : name(%s) Address(%s) Subnet(%s)",secureName,secureAddr,secureSub)
 
     var nfsAccess, nfsNoRoot, nfsInsecure string
 
-    nfsAccess = pvc.Annotations["flexa.io/nfsAccess"]
-    nfsNoRoot = pvc.Annotations["flexa.io/nfsNoRootSquashing"]
-    nfsInsecure = pvc.Annotations["flexa.io/nfsInsecure"]
+    nfsAccess = firstNonEmpty(pvc.Annotations["flexa.io/nfsAccess"], req.Parameters["nfsAccess"])
+    nfsNoRoot = firstNonEmpty(pvc.Annotations["flexa.io/nfsNoRootSquashing"], req.Parameters["nfsNoRootSquashing"])
+    nfsInsecure = firstNonEmpty(pvc.Annotations["flexa.io/nfsInsecure"], req.Parameters["nfsInsecure"])
 
     log.Infof("NFS Secure : Access(%s) NoRootSquashing(%s) Insecure(%s)",nfsAccess,nfsNoRoot,nfsInsecure)
 
