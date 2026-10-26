@@ -200,11 +200,24 @@ On provision, the PV carries metadata such as `vip`, `baseDir`, `poolName`, `fs`
 
 - Build binary: `make flexa-csi-driver`
 - Build image: `make docker-build`
-- Publish to GHCR: `docker login ghcr.io` then `make docker-publish` (publishes `ghcr.io/gluesys/flexa-csi:1.0.0` and `:latest`)
+- Publish to GHCR: `docker login ghcr.io` then `make docker-publish`
+
+`IMAGE_VERSION` defaults to `git describe --tags --always --dirty`, so a local
+build is tagged after the checked-out commit rather than a fixed version. Pass
+it explicitly for a reproducible tag: `make docker-publish IMAGE_VERSION=1.0.0`
+publishes `ghcr.io/gluesys/flexa-csi:1.0.0` and `:latest`.
 
 By default the cluster pulls `ghcr.io/gluesys/flexa-csi` from GHCR. For a locally built image, set `imagePullPolicy: IfNotPresent` and the image reference in Helm `values.yaml` or in `deploy/kubernetes/controller.yml` / `node.yml`.
 
 **Installing** a build is covered in [Installation](#installation); override `image.repository` / `image.tag` in Helm or edit the manifests before `kubectl apply`.
+
+### Continuous integration
+
+- **Gate:** `make verify` builds the driver binary and runs `go test -race ./...`.
+  Run it before opening a pull request.
+- **Advisory:** `make fmt-check` (gofmt) and `make lint` (golangci-lint).
+- **Chart:** `make chart-package` builds the chart, and `make chart-push`
+  pushes it as an OCI artifact to `CHART_REGISTRY` (default `oci://ghcr.io/gluesys`).
 
 ## Uninstall
 

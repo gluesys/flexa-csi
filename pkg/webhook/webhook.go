@@ -187,7 +187,9 @@ func sendResponse(w http.ResponseWriter, uid types.UID, allowed bool, message st
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(respBytes)
+	if _, err := w.Write(respBytes); err != nil {
+		log.Errorf("webhook: failed to write response: %v", err)
+	}
 }
 
 func StartWebhookServer(certFile, keyFile, listenAddr string) error {
@@ -195,7 +197,7 @@ func StartWebhookServer(certFile, keyFile, listenAddr string) error {
 	mux.HandleFunc("/mutate", HandleMutate)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	server := &http.Server{

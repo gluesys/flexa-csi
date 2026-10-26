@@ -103,4 +103,3 @@ func (d *Driver) StartClientInfoSecretWatch() {
 		log.Infof("ClientInfo secret watch started: %s/%s", ns, clientInfoSecretName)
 	}()
 }
-

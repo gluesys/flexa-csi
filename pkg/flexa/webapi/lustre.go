@@ -9,8 +9,8 @@ import (
 	"net/url"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/gluesys/flexa-csi/pkg/utils"
+	log "github.com/sirupsen/logrus"
 )
 
 type LustreVolumeCreateResponse struct {
@@ -31,7 +31,7 @@ type LustreVolumeInfoResponse struct {
 		UsedMb  int64 `json:"usedMb"`
 		FreeMb  int64 `json:"freeMb"`
 	} `json:"quota"`
-	Status      string `json:"status"`
+	Status string `json:"status"`
 }
 
 func (fep *FEP) LustreCreateVolume(
@@ -178,4 +178,3 @@ func (fep *FEP) lustrePost(cgiPath string, body map[string]string) (LustreVolume
 	}
 	return out, nil
 }
-

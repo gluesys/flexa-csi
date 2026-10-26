@@ -66,13 +66,13 @@ clientInfo:
   content: |
     profiles:
       zfs:
-        proxyIP: 192.168.34.11
+        proxyIP: 10.0.0.11
         proxyPort: 9001
-        mountIP: "100.100.0.0/18"
+        mountIP: "172.16.0.0/18"
       lustre:
-        proxyIP: 192.168.34.21
+        proxyIP: 10.0.0.12
         proxyPort: 9001
-        mountIP: "100.100.0.0/18"
+        mountIP: "172.16.0.0/18"
 
 # Optional StorageClasses: arbitrary keys (e.g. zfs_poolA). Set enabled: true per entry.
 # ZFS: set poolName. Lustre: set clusterName (not poolName). Align proxyProfile with clientInfo profiles.

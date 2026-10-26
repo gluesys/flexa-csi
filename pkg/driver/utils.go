@@ -19,96 +19,93 @@ limitations under the License.
 package driver
 
 import (
-    "context"
-    "fmt"
-    "strings"
+	"context"
+	"fmt"
+	"strings"
 
-    "github.com/container-storage-interface/spec/lib/go/csi"
-    log "github.com/sirupsen/logrus"
-    //"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
-    "google.golang.org/grpc"
-    //clientset "k8s.io/client-go/kubernetes"
-    //"k8s.io/client-go/rest"
-    "k8s.io/utils/exec"
-    "k8s.io/mount-utils"
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	log "github.com/sirupsen/logrus"
+	//"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
+	"google.golang.org/grpc"
+	//clientset "k8s.io/client-go/kubernetes"
+	//"k8s.io/client-go/rest"
+	"k8s.io/mount-utils"
+	"k8s.io/utils/exec"
 )
 
 func ParseEndpoint(ep string) (string, string, error) {
-    if strings.HasPrefix(strings.ToLower(ep), "unix://") || strings.HasPrefix(strings.ToLower(ep), "tcp://") {
-        s := strings.SplitN(ep, "://", 2)
-        if s[1] != "" {
-            return s[0], s[1], nil
-        }
-    }
-    return "", "", fmt.Errorf("Invalid endpoint: %v", ep)
+	if strings.HasPrefix(strings.ToLower(ep), "unix://") || strings.HasPrefix(strings.ToLower(ep), "tcp://") {
+		s := strings.SplitN(ep, "://", 2)
+		if s[1] != "" {
+			return s[0], s[1], nil
+		}
+	}
+	return "", "", fmt.Errorf("Invalid endpoint: %v", ep)
 }
 
 func NewControllerServer(d *Driver) *ControllerServer {
-    return &ControllerServer{
-        Driver: d,
-        FlxService: d.FlxService,
-    }
+	return &ControllerServer{
+		Driver:     d,
+		FlxService: d.FlxService,
+	}
 }
 
-
 func NewNodeServer(d *Driver) *NodeServer {
-    return &NodeServer{
-        Driver: d,
-        FlxService: d.FlxService,
-        Mounter: &mount.SafeFormatAndMount{
-            Interface: mount.New(""),
-            Exec: exec.New(),
-        },
-        Client: nil,
-    }
+	return &NodeServer{
+		Driver:     d,
+		FlxService: d.FlxService,
+		Mounter: &mount.SafeFormatAndMount{
+			Interface: mount.New(""),
+			Exec:      exec.New(),
+		},
+		Client: nil,
+	}
 }
 
 func NewIdentityServer(d *Driver) *identityServer {
-    return &identityServer{
-        Driver: d,
-    }
+	return &identityServer{
+		Driver: d,
+	}
 }
 
 func NewVolumeCapabilityAccessMode(mode csi.VolumeCapability_AccessMode_Mode) *csi.VolumeCapability_AccessMode {
-    return &csi.VolumeCapability_AccessMode{Mode: mode}
+	return &csi.VolumeCapability_AccessMode{Mode: mode}
 }
 
 func NewControllerServiceCapability(cap csi.ControllerServiceCapability_RPC_Type) *csi.ControllerServiceCapability {
-    return &csi.ControllerServiceCapability{
-        Type: &csi.ControllerServiceCapability_Rpc{
-            Rpc: &csi.ControllerServiceCapability_RPC{
-                Type: cap,
-            },
-        },
-    }
+	return &csi.ControllerServiceCapability{
+		Type: &csi.ControllerServiceCapability_Rpc{
+			Rpc: &csi.ControllerServiceCapability_RPC{
+				Type: cap,
+			},
+		},
+	}
 }
 
 func NewNodeServiceCapability(cap csi.NodeServiceCapability_RPC_Type) *csi.NodeServiceCapability {
-    return &csi.NodeServiceCapability{
-        Type: &csi.NodeServiceCapability_Rpc{
-            Rpc: &csi.NodeServiceCapability_RPC{
-                Type: cap,
-            },
-        },
-    }
+	return &csi.NodeServiceCapability{
+		Type: &csi.NodeServiceCapability_Rpc{
+			Rpc: &csi.NodeServiceCapability_RPC{
+				Type: cap,
+			},
+		},
+	}
 }
 
 func RunControllerandNodePublishServer(endpoint string, d *Driver, cs csi.ControllerServer, ns csi.NodeServer) {
-    ids := NewIdentityServer(d)
+	ids := NewIdentityServer(d)
 
-    s := NewNonBlockingGRPCServer()
-    s.Start(endpoint, ids, cs, ns)
+	s := NewNonBlockingGRPCServer()
+	s.Start(endpoint, ids, cs, ns)
 }
 
 func logGRPC(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-    log.Infof("GRPC call: %s", info.FullMethod)
-    //log.Infof("GRPC request: %s", protosanitizer.StripSecrets(req))
-    resp, err := handler(ctx, req)
-    if err != nil {
-        log.Errorf("GRPC error: %v", err)
-    } else {
-        //log.Infof("GRPC response: %s", protosanitizer.StripSecrets(resp))
-    }
-    return resp, err
+	log.Infof("GRPC call: %s", info.FullMethod)
+	//log.Infof("GRPC request: %s", protosanitizer.StripSecrets(req))
+	resp, err := handler(ctx, req)
+	if err != nil {
+		log.Errorf("GRPC error: %v", err)
+	}
+	//log.Infof("GRPC response: %s", protosanitizer.StripSecrets(resp))
+	return resp, err
 }
-

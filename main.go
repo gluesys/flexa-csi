@@ -5,129 +5,129 @@
 package main
 
 import (
-    "fmt"
-    "os"
-    "os/signal"
-    "syscall"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 
-    "github.com/spf13/cobra"
-    log "github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
 
-    "github.com/gluesys/flexa-csi/pkg/driver"
-    "github.com/gluesys/flexa-csi/pkg/flexa/common"
-    "github.com/gluesys/flexa-csi/pkg/flexa/service"
-    "github.com/gluesys/flexa-csi/pkg/logger"
-    "github.com/gluesys/flexa-csi/pkg/webhook"
+	"github.com/gluesys/flexa-csi/pkg/driver"
+	"github.com/gluesys/flexa-csi/pkg/flexa/common"
+	"github.com/gluesys/flexa-csi/pkg/flexa/service"
+	"github.com/gluesys/flexa-csi/pkg/logger"
+	"github.com/gluesys/flexa-csi/pkg/webhook"
 )
 
 var (
-    // CSI options
-    csiNodeID         = "CSINode"
-    csiEndpoint       = "unix:///var/lib/kubelet/plugins/" + driver.DriverName + "/csi.sock"
-    csiClientInfoPath = "/etc/flexa/client-info.yml"
-    // runMode: "csi" (default) or "webhook" (mutating admission HTTP server)
-    runMode    = "csi"
-    tlsCertPath = ""
-    tlsKeyPath  = ""
-    listenAddr  = ":8443"
-    // Logging
-    logLevel    = "info"
-    webapiDebug = false
-    multipathForUC = true
+	// CSI options
+	csiNodeID         = "CSINode"
+	csiEndpoint       = "unix:///var/lib/kubelet/plugins/" + driver.DriverName + "/csi.sock"
+	csiClientInfoPath = "/etc/flexa/client-info.yml"
+	// runMode: "csi" (default) or "webhook" (mutating admission HTTP server)
+	runMode     = "csi"
+	tlsCertPath = ""
+	tlsKeyPath  = ""
+	listenAddr  = ":8443"
+	// Logging
+	logLevel       = "info"
+	webapiDebug    = false
+	multipathForUC = true
 )
 
 var rootCmd = &cobra.Command{
-    Use:   "flexa-csi-driver",
-    Short: "Gluesys FlexA CSI Driver",
-    SilenceUsage: true,
-    RunE:  func(cmd *cobra.Command, args []string) error {
-        if webapiDebug {
-            logger.WebapiDebug = true
-            logLevel = "debug"
-        }
-        logger.Init(logLevel)
+	Use:          "flexa-csi-driver",
+	Short:        "Gluesys FlexA CSI Driver",
+	SilenceUsage: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if webapiDebug {
+			logger.WebapiDebug = true
+			logLevel = "debug"
+		}
+		logger.Init(logLevel)
 
-        if runMode == "webhook" {
-            if tlsCertPath == "" || tlsKeyPath == "" {
-                return fmt.Errorf("webhook mode requires --tls-cert and --tls-key")
-            }
-            log.Infof("Webhook mode: listen=%s cert=%s key=%s", listenAddr, tlsCertPath, tlsKeyPath)
-            return webhook.StartWebhookServer(tlsCertPath, tlsKeyPath, listenAddr)
-        }
+		if runMode == "webhook" {
+			if tlsCertPath == "" || tlsKeyPath == "" {
+				return fmt.Errorf("webhook mode requires --tls-cert and --tls-key")
+			}
+			log.Infof("Webhook mode: listen=%s cert=%s key=%s", listenAddr, tlsCertPath, tlsKeyPath)
+			return webhook.StartWebhookServer(tlsCertPath, tlsKeyPath, listenAddr)
+		}
 
-        if !multipathForUC {
-            driver.MultipathEnabled = false
-        }
+		if !multipathForUC {
+			driver.MultipathEnabled = false
+		}
 
-        if csiEndpoint == "" {
-            return fmt.Errorf("CSI mode requires --endpoint")
-        }
-        if csiClientInfoPath == "" {
-            return fmt.Errorf("CSI mode requires --client-info")
-        }
+		if csiEndpoint == "" {
+			return fmt.Errorf("CSI mode requires --endpoint")
+		}
+		if csiClientInfoPath == "" {
+			return fmt.Errorf("CSI mode requires --client-info")
+		}
 
-        err := driverStart()
-        if err != nil {
-            log.Errorf("Failed to driverStart(): %v", err)
-            return err
-        }
-        return nil
-    },
+		err := driverStart()
+		if err != nil {
+			log.Errorf("Failed to driverStart(): %v", err)
+			return err
+		}
+		return nil
+	},
 }
 
 func driverStart() error {
-    log.Infof("CSI Options = {%s, %s, %s}", csiNodeID, csiEndpoint, csiClientInfoPath)
+	log.Infof("CSI Options = {%s, %s, %s}", csiNodeID, csiEndpoint, csiClientInfoPath)
 
-    flxService := service.NewFlexAService()
+	flxService := service.NewFlexAService()
 
-    cfg, err := common.LoadClientInfoConfig(csiClientInfoPath)
-    if err != nil {
-        log.Errorf("Failed to read client-info: %v", err)
-        return err
-    }
-    if cfg.Default != nil {
-        flxService.SetFep(cfg.Default)
-    }
+	cfg, err := common.LoadClientInfoConfig(csiClientInfoPath)
+	if err != nil {
+		log.Errorf("Failed to read client-info: %v", err)
+		return err
+	}
+	if cfg.Default != nil {
+		flxService.SetFep(cfg.Default)
+	}
 
-    // 2. Create and Run the Driver
-    drv, err := driver.NewControllerAndNodeDriver(csiNodeID, csiEndpoint, flxService)
-    if err != nil {
-        log.Errorf("Failed to create driver: %v", err)
-        return err
-    }
-    drv.SetClientInfoConfig(cfg)
-    drv.Activate()
+	// 2. Create and Run the Driver
+	drv, err := driver.NewControllerAndNodeDriver(csiNodeID, csiEndpoint, flxService)
+	if err != nil {
+		log.Errorf("Failed to create driver: %v", err)
+		return err
+	}
+	drv.SetClientInfoConfig(cfg)
+	drv.Activate()
 
-    c := make(chan os.Signal, 1)
-    signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-    // Block until a signal is received.
-    <-c
-    log.Infof("Shutting down.")
-    return nil
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	// Block until a signal is received.
+	<-c
+	log.Infof("Shutting down.")
+	return nil
 }
 
 func main() {
-    addFlags(rootCmd)
+	addFlags(rootCmd)
 
-    if err := rootCmd.Execute(); err != nil {
-        os.Exit(1)
-    }
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
 
-    os.Exit(0)
+	os.Exit(0)
 }
 
 func addFlags(cmd *cobra.Command) {
-    cmd.PersistentFlags().StringVar(&runMode, "mode", runMode, "Run mode: csi (default) or webhook")
-    cmd.PersistentFlags().StringVar(&tlsCertPath, "tls-cert", tlsCertPath, "Path to TLS certificate (webhook mode)")
-    cmd.PersistentFlags().StringVar(&tlsKeyPath, "tls-key", tlsKeyPath, "Path to TLS private key (webhook mode)")
-    cmd.PersistentFlags().StringVar(&listenAddr, "listen-addr", listenAddr, "Listen address for webhook mode (e.g. :8443)")
-    cmd.PersistentFlags().StringVar(&csiNodeID, "nodeid", csiNodeID, "Node ID")
-    cmd.PersistentFlags().StringVarP(&csiEndpoint, "endpoint", "e", csiEndpoint, "CSI endpoint")
-    cmd.PersistentFlags().StringVarP(&csiClientInfoPath, "client-info", "f", csiClientInfoPath, "Path to Gluesys FlexA client-info YAML (proxy profiles)")
-    cmd.PersistentFlags().StringVar(&logLevel, "log-level", logLevel, "Log level (debug, info, warn, error, fatal)")
-    cmd.PersistentFlags().BoolVarP(&webapiDebug, "debug", "d", webapiDebug, "Enable webapi debugging logs")
-    cmd.PersistentFlags().BoolVar(&multipathForUC, "multipath", multipathForUC, "Set to 'false' to disable multipath for UC")
+	cmd.PersistentFlags().StringVar(&runMode, "mode", runMode, "Run mode: csi (default) or webhook")
+	cmd.PersistentFlags().StringVar(&tlsCertPath, "tls-cert", tlsCertPath, "Path to TLS certificate (webhook mode)")
+	cmd.PersistentFlags().StringVar(&tlsKeyPath, "tls-key", tlsKeyPath, "Path to TLS private key (webhook mode)")
+	cmd.PersistentFlags().StringVar(&listenAddr, "listen-addr", listenAddr, "Listen address for webhook mode (e.g. :8443)")
+	cmd.PersistentFlags().StringVar(&csiNodeID, "nodeid", csiNodeID, "Node ID")
+	cmd.PersistentFlags().StringVarP(&csiEndpoint, "endpoint", "e", csiEndpoint, "CSI endpoint")
+	cmd.PersistentFlags().StringVarP(&csiClientInfoPath, "client-info", "f", csiClientInfoPath, "Path to Gluesys FlexA client-info YAML (proxy profiles)")
+	cmd.PersistentFlags().StringVar(&logLevel, "log-level", logLevel, "Log level (debug, info, warn, error, fatal)")
+	cmd.PersistentFlags().BoolVarP(&webapiDebug, "debug", "d", webapiDebug, "Enable webapi debugging logs")
+	cmd.PersistentFlags().BoolVar(&multipathForUC, "multipath", multipathForUC, "Set to 'false' to disable multipath for UC")
 
-    cmd.Flags().SortFlags = false
-    cmd.PersistentFlags().SortFlags = false
+	cmd.Flags().SortFlags = false
+	cmd.PersistentFlags().SortFlags = false
 }

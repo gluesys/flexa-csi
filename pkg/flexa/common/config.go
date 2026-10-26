@@ -17,9 +17,9 @@ import (
 // ProxyInfo describes one Gluesys FlexA CSI proxy endpoint and VIP resolve reference.
 // Host/Port are used for HTTP to the proxy; MountIP (e.g. 192.168.0.0/18) is used for VIP resolve body ip when set.
 type ProxyInfo struct {
-	Host     string `yaml:"host,omitempty"`
-	Port     int    `yaml:"port,omitempty"`
-	MountIP  string `yaml:"mountIP,omitempty"`
+	Host    string `yaml:"host,omitempty"`
+	Port    int    `yaml:"port,omitempty"`
+	MountIP string `yaml:"mountIP,omitempty"`
 	// Profiles use proxyIP/proxyPort in YAML; unmarshaling is done in LoadClientInfoConfigFromReader.
 }
 
@@ -29,9 +29,9 @@ type ClientInfoConfig struct {
 }
 
 type clientInfoYAML struct {
-	Host     string `yaml:"host,omitempty"`
-	Port     int    `yaml:"port,omitempty"`
-	MountIP  string `yaml:"mountIP,omitempty"`
+	Host    string `yaml:"host,omitempty"`
+	Port    int    `yaml:"port,omitempty"`
+	MountIP string `yaml:"mountIP,omitempty"`
 
 	Profiles map[string]struct {
 		ProxyIP   string `yaml:"proxyIP"`
@@ -58,9 +58,9 @@ func LoadClientInfoConfigFromReader(r io.Reader) (*ClientInfoConfig, error) {
 
 	if strings.TrimSpace(in.Host) != "" && in.Port != 0 {
 		cfg.Default = &ProxyInfo{
-			Host:     strings.TrimSpace(in.Host),
-			Port:     in.Port,
-			MountIP:  strings.TrimSpace(in.MountIP),
+			Host:    strings.TrimSpace(in.Host),
+			Port:    in.Port,
+			MountIP: strings.TrimSpace(in.MountIP),
 		}
 	}
 
@@ -74,9 +74,9 @@ func LoadClientInfoConfigFromReader(r io.Reader) (*ClientInfoConfig, error) {
 			return nil, fmt.Errorf("profiles.%s must have proxyIP and proxyPort", n)
 		}
 		cfg.Profiles[n] = ProxyInfo{
-			Host:     ip,
-			Port:     p.ProxyPort,
-			MountIP:  strings.TrimSpace(p.MountIP),
+			Host:    ip,
+			Port:    p.ProxyPort,
+			MountIP: strings.TrimSpace(p.MountIP),
 		}
 	}
 
