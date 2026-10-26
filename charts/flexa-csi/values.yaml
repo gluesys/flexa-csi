@@ -51,6 +51,10 @@ node:
   registrationDir: /var/lib/kubelet/plugins_registry
   flexaMetaPath: /var/lib/flexa/meta
   flexaGroupMountPath: /mnt/flexa
+  # FlexA 는 NFS v3 만 켜 둔다. v3 파일 잠금(NLM)에 필요한 rpcbind·rpc.statd 를 node 플러그인이
+  # 띄우고 지켜본다(노드에 이미 떠 있으면 그대로 쓴다).
+  nfsLockDaemons: true
+  statdStatePath: /var/lib/flexa/statd
 
 # client-info Secret mounted at /etc/flexa/client-info.yml
 clientInfo:

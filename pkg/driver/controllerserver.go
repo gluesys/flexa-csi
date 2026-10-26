@@ -249,6 +249,10 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
+	spec.SecureAddr, spec.SecureSub, err = defaultSecureZone(secureAddr, secureSub, proxy.MountIP)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
 	reqService := service.NewFlexAService()
 	reqService.SetFep(proxy)
 

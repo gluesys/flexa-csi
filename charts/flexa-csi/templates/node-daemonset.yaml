@@ -74,6 +74,9 @@ spec:
             - --client-info
             - /etc/flexa/client-info.yml
             - --log-level={{ .Values.logLevel }}
+            {{- if .Values.node.nfsLockDaemons }}
+            - --nfs-lock-daemons
+            {{- end }}
           env:
             - name: CSI_ENDPOINT
               value: unix://csi/csi.sock
@@ -98,6 +101,10 @@ spec:
               mountPath: /var/lib/flexa/meta
             - name: flexa-group-mount-dir
               mountPath: /mnt/flexa
+            {{- if .Values.node.nfsLockDaemons }}
+            - name: statd-state-dir
+              mountPath: /var/lib/nfs/statd
+            {{- end }}
           {{- with .Values.node.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -134,3 +141,10 @@ spec:
           hostPath:
             path: {{ .Values.node.flexaGroupMountPath }}
             type: DirectoryOrCreate
+        {{- if .Values.node.nfsLockDaemons }}
+        # rpc.statd 상태(재기동 후 NFS 서버에 잠금 복구를 알리는 목록)를 노드에 남긴다.
+        - name: statd-state-dir
+          hostPath:
+            path: {{ .Values.node.statdStatePath }}
+            type: DirectoryOrCreate
+        {{- end }}

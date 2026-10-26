@@ -34,6 +34,7 @@ var (
 	logLevel       = "info"
 	webapiDebug    = false
 	multipathForUC = true
+	nfsLockDaemons = false
 )
 
 var rootCmd = &cobra.Command{
@@ -96,6 +97,9 @@ func driverStart() error {
 		return err
 	}
 	drv.SetClientInfoConfig(cfg)
+	if nfsLockDaemons {
+		driver.StartNfsLockDaemons()
+	}
 	drv.Activate()
 
 	c := make(chan os.Signal, 1)
@@ -127,6 +131,7 @@ func addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&logLevel, "log-level", logLevel, "Log level (debug, info, warn, error, fatal)")
 	cmd.PersistentFlags().BoolVarP(&webapiDebug, "debug", "d", webapiDebug, "Enable webapi debugging logs")
 	cmd.PersistentFlags().BoolVar(&multipathForUC, "multipath", multipathForUC, "Set to 'false' to disable multipath for UC")
+	cmd.PersistentFlags().BoolVar(&nfsLockDaemons, "nfs-lock-daemons", nfsLockDaemons, "Start and supervise rpcbind/rpc.statd for NFSv3 locking (node plugin)")
 
 	cmd.Flags().SortFlags = false
 	cmd.PersistentFlags().SortFlags = false
