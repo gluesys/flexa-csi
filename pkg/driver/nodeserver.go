@@ -68,6 +68,21 @@ func (ns *NodeServer) lookupPVAttributesByVolumeHandle(ctx context.Context, volu
 	return nil, false
 }
 
+// isReadOnlyAccessMode reports whether the requested access mode is a read-only mode
+// (SINGLE_NODE_READER_ONLY / MULTI_NODE_READER_ONLY, i.e. a ROX PVC). The driver
+// enforces a read-only mount for these regardless of the request's readonly flag.
+func isReadOnlyAccessMode(vc *csi.VolumeCapability) bool {
+	if vc == nil {
+		return false
+	}
+	switch vc.GetAccessMode().GetMode() {
+	case csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
+		csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY:
+		return true
+	}
+	return false
+}
+
 func createTargetMountPathNfs(mounter mount.Interface, mountPath string, mountPermissionsUint uint64) (bool, error) {
 	notMount, err := mounter.IsLikelyNotMountPoint(mountPath)
 	if err != nil {
@@ -473,7 +488,7 @@ func (ns *NodeServer) nodePublishLustre(ctx context.Context, req *csi.NodePublis
 		return &csi.NodePublishVolumeResponse{}, nil
 	}
 
-	readonly := req.GetReadonly()
+	readonly := req.GetReadonly() || isReadOnlyAccessMode(req.GetVolumeCapability())
 
 	bindOptions := []string{"bind", "rprivate"}
 	if err = ns.Mounter.Interface.Mount(stagingPath, targetPath, "", bindOptions); err != nil {
@@ -564,7 +579,7 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 
 	var bindOptions []string
 
-	readonly := slices.Contains(stagingOptions, "ro")
+	readonly := req.GetReadonly() || slices.Contains(stagingOptions, "ro") || isReadOnlyAccessMode(req.GetVolumeCapability())
 
 	bindOptions = []string{"bind", "rprivate"}
 
@@ -784,21 +799,9 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 	}, nil
 }
 
+// NodeExpandVolume is not advertised in NodeGetCapabilities: the driver mounts NFS
+// and Lustre, which have no node-side resize step, and ControllerExpandVolume always
+// returns NodeExpansionRequired=false.
 func (ns *NodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
-	if req.GetVolumeId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
-	}
-	if req.GetVolumePath() == "" {
-		return nil, status.Error(codes.InvalidArgument, "Volume path missing in request")
-	}
-
-	// Current driver uses NFS mounts; there is no filesystem resize step here.
-	// Return success so the external-resizer can complete the workflow.
-	capBytes, err := getSizeByCapacityRange(req.GetCapacityRange())
-	if err != nil {
-		return nil, err
-	}
-	return &csi.NodeExpandVolumeResponse{
-		CapacityBytes: capBytes,
-	}, nil
+	return nil, status.Error(codes.Unimplemented, "NodeExpandVolume is not supported")
 }

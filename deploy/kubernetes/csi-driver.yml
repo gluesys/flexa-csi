@@ -3,7 +3,10 @@ kind: CSIDriver
 metadata:
   name: csi.flexa.com
 spec:
-  attachRequired: true # Indicates the driver requires an attach operation (TODO: ControllerPublishVolume should be implemented)
+  # ControllerPublishVolume/ControllerUnpublishVolume are not implemented, so no
+  # attach step exists. Keeping this true only creates unused VolumeAttachment
+  # objects and delays detach on node failure.
+  attachRequired: false
   podInfoOnMount: true
   volumeLifecycleModes:
     - Persistent

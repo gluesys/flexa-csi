@@ -20,6 +20,9 @@ type ProxyInfo struct {
 	Host    string `yaml:"host,omitempty"`
 	Port    int    `yaml:"port,omitempty"`
 	MountIP string `yaml:"mountIP,omitempty"`
+	// Fs identifies the backend filesystem served by this proxy ("zfs" or "lustre").
+	// Used by ListVolumes/GetCapacity to pick the correct list/capacity path. Empty defaults to "zfs".
+	Fs string `yaml:"fs,omitempty"`
 	// Profiles use proxyIP/proxyPort in YAML; unmarshaling is done in LoadClientInfoConfigFromReader.
 }
 
@@ -32,11 +35,14 @@ type clientInfoYAML struct {
 	Host    string `yaml:"host,omitempty"`
 	Port    int    `yaml:"port,omitempty"`
 	MountIP string `yaml:"mountIP,omitempty"`
+	// Fs is the backend served by the legacy host/port proxy ("zfs" or "lustre").
+	Fs string `yaml:"fs,omitempty"`
 
 	Profiles map[string]struct {
 		ProxyIP   string `yaml:"proxyIP"`
 		ProxyPort int    `yaml:"proxyPort"`
 		MountIP   string `yaml:"mountIP,omitempty"`
+		Fs        string `yaml:"fs,omitempty"`
 	} `yaml:"profiles,omitempty"`
 }
 
@@ -61,6 +67,7 @@ func LoadClientInfoConfigFromReader(r io.Reader) (*ClientInfoConfig, error) {
 			Host:    strings.TrimSpace(in.Host),
 			Port:    in.Port,
 			MountIP: strings.TrimSpace(in.MountIP),
+			Fs:      strings.TrimSpace(in.Fs),
 		}
 	}
 
@@ -77,6 +84,7 @@ func LoadClientInfoConfigFromReader(r io.Reader) (*ClientInfoConfig, error) {
 			Host:    ip,
 			Port:    p.ProxyPort,
 			MountIP: strings.TrimSpace(p.MountIP),
+			Fs:      strings.TrimSpace(p.Fs),
 		}
 	}
 

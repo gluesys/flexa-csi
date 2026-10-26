@@ -31,6 +31,11 @@ type LustreVolumeInfoResponse struct {
 		UsedMb  int64 `json:"usedMb"`
 		FreeMb  int64 `json:"freeMb"`
 	} `json:"quota"`
+	Cluster struct {
+		TotalMb    int64 `json:"totalMb"`
+		QuotaSumMb int64 `json:"quotaSumMb"`
+		FreeMb     int64 `json:"freeMb"`
+	} `json:"cluster"`
 	Status string `json:"status"`
 }
 
@@ -93,6 +98,70 @@ func (fep *FEP) LustreInfoVolume(clusterName string, volName string) (LustreVolu
 	if err != nil {
 		return LustreVolumeInfoResponse{}, err
 	}
+	return output, nil
+}
+
+type LustreClusterListResponse struct {
+	ClusterList []string `json:"clusterList"`
+}
+
+// LustreListCluster lists all Lustre cluster names known to the proxy.
+func (fep *FEP) LustreListCluster() ([]string, error) {
+	params := url.Values{}
+	cgiPath := "lustre/cluster/list"
+
+	var output LustreClusterListResponse
+	_, err := fep.sendRequest("", &output, params, cgiPath)
+	if err != nil {
+		return nil, err
+	}
+	log.Infof("Gluesys FlexA Call(LustreListCluster) : clusters=%v", output.ClusterList)
+	return output.ClusterList, nil
+}
+
+type LustreVolumeListResponse struct {
+	ClusterName string   `json:"clusterName"`
+	VolumeList  []string `json:"volumeList"`
+}
+
+// LustreListVolume lists CSI volume (share) names under a Lustre cluster.
+func (fep *FEP) LustreListVolume(clusterName string) ([]string, error) {
+	if clusterName == "" {
+		return nil, fmt.Errorf("clusterName is required")
+	}
+	params := url.Values{}
+	cgiPath := fmt.Sprintf("lustre/cluster/%s/volume/list", clusterName)
+
+	var output LustreVolumeListResponse
+	_, err := fep.sendRequest("", &output, params, cgiPath)
+	if err != nil {
+		return nil, err
+	}
+	log.Infof("Gluesys FlexA Call(LustreListVolume) : cluster=%s volumes=%v", clusterName, output.VolumeList)
+	return output.VolumeList, nil
+}
+
+type LustreClusterInfoResponse struct {
+	ClusterName string `json:"clusterName"`
+	Total       int64  `json:"total"`
+	QuotaSum    int64  `json:"quotaSum"`
+	Free        int64  `json:"free"`
+}
+
+// LustreClusterInfo returns cluster-level capacity (Mb) for GetCapacity.
+func (fep *FEP) LustreClusterInfo(clusterName string) (LustreClusterInfoResponse, error) {
+	if clusterName == "" {
+		return LustreClusterInfoResponse{}, fmt.Errorf("clusterName is required")
+	}
+	params := url.Values{}
+	cgiPath := fmt.Sprintf("lustre/cluster/%s", clusterName)
+
+	var output LustreClusterInfoResponse
+	_, err := fep.sendRequest("", &output, params, cgiPath)
+	if err != nil {
+		return LustreClusterInfoResponse{}, err
+	}
+	log.Infof("Gluesys FlexA Call(LustreClusterInfo) : cluster=%s total=%d free=%d", clusterName, output.Total, output.Free)
 	return output, nil
 }
 

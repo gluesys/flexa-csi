@@ -5,7 +5,10 @@ metadata:
   labels:
     {{- include "flexa-csi.labels" . | nindent 4 }}
 spec:
-  attachRequired: true
+  # ControllerPublishVolume/ControllerUnpublishVolume are not implemented, so no
+  # attach step exists. Keeping this true only creates unused VolumeAttachment
+  # objects and delays detach on node failure.
+  attachRequired: false
   podInfoOnMount: true
   volumeLifecycleModes:
     - Persistent

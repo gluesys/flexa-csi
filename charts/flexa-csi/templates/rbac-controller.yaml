@@ -39,9 +39,6 @@ rules:
     resources: ["csinodeinfos"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["storage.k8s.io"]
-    resources: ["volumeattachments", "volumeattachments/status"]
-    verbs: ["get", "list", "watch", "update", "patch"]
-  - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["snapshot.storage.k8s.io"]
@@ -52,7 +49,7 @@ rules:
     verbs: ["get", "list"]
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get"]
+    verbs: ["get", "list", "watch"]
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1

@@ -86,6 +86,8 @@ func NewControllerAndNodeDriver(nodeID string, endpoint string, flxService inter
 	// Initialize with an empty config (caller should set it from client-info.yml / Secret watch).
 	d.clientInfo.Store(&common.ClientInfoConfig{Default: nil, Profiles: map[string]common.ProxyInfo{}})
 
+	// LIST_VOLUMES/GET_CAPACITY are backed by the proxy list/info endpoints
+	// (ZFS pools and Lustre clusters, selected per client-info profile "fs").
 	d.addControllerServiceCapabilities([]csi.ControllerServiceCapability_RPC_Type{
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
 		csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
@@ -95,12 +97,15 @@ func NewControllerAndNodeDriver(nodeID string, endpoint string, flxService inter
 
 	d.addVolumeCapabilityAccessModes([]csi.VolumeCapability_AccessMode_Mode{
 		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+		csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
+		csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
 		csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
 	})
 
+	// Node EXPAND_VOLUME is not advertised: ControllerExpandVolume always returns
+	// NodeExpansionRequired=false, so the node side never performs a resize.
 	d.addNodeServiceCapabilities([]csi.NodeServiceCapability_RPC_Type{
 		csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
-		csi.NodeServiceCapability_RPC_EXPAND_VOLUME,
 		csi.NodeServiceCapability_RPC_GET_VOLUME_STATS,
 	})
 

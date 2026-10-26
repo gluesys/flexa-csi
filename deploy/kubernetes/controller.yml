@@ -35,9 +35,6 @@ rules:
     resources: ["csinodeinfos"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["storage.k8s.io"]
-    resources: ["volumeattachments", "volumeattachments/status"]
-    verbs: ["get", "list", "watch", "update", "patch"]
-  - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["snapshot.storage.k8s.io"]
@@ -48,7 +45,7 @@ rules:
     verbs: ["get", "list"]
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get"]
+    verbs: ["get", "list", "watch"]
 
 ---
 kind: ClusterRoleBinding
@@ -97,23 +94,6 @@ spec:
             - --csi-address=$(ADDRESS)
             - --v=5
             - --extra-create-metadata
-          env:
-            - name: ADDRESS
-              value: /var/lib/csi/sockets/pluginproxy/csi.sock
-          imagePullPolicy: Always
-          volumeMounts:
-            - name: socket-dir
-              mountPath: /var/lib/csi/sockets/pluginproxy/
-        - name: csi-attacher
-          securityContext:
-            privileged: true
-            capabilities:
-              add: ["SYS_ADMIN"]
-            allowPrivilegeEscalation: true
-          image: registry.k8s.io/sig-storage/csi-attacher:v3.3.0
-          args:
-            - --v=5
-            - --csi-address=$(ADDRESS)
           env:
             - name: ADDRESS
               value: /var/lib/csi/sockets/pluginproxy/csi.sock

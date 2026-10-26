@@ -49,6 +49,7 @@ type K8sVolumeRespSpec struct {
 	Used       int64
 	Fs         string // Default : zfs , TODO : lustre
 	BaseDir    string // Share Base Directory Path
+	ShareName  string // NFS Share Name
 }
 
 //TODO type K8sSnapshotRespSpec struct {}

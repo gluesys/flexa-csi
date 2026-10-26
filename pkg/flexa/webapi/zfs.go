@@ -1,15 +1,27 @@
 package webapi
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/gluesys/flexa-csi/pkg/utils"
 	log "github.com/sirupsen/logrus"
 )
 
-// ZfsNfsShareName is the fixed share name segment for NFS export paths (per CSI driver convention).
-const ZfsNfsShareName = "share"
+// LegacyZfsNfsShareName is used by PVs created before per-volume share names.
+const LegacyZfsNfsShareName = "share"
+
+// ZfsNfsShareName returns a globally unique share name for a CSI volume.
+func ZfsNfsShareName(volumeID string) string {
+	if strings.TrimSpace(volumeID) == "" {
+		return LegacyZfsNfsShareName
+	}
+	return volumeID
+}
 
 type ZfsPoolList struct {
 	PoolList []string `json:"poolList"`
@@ -20,23 +32,59 @@ type ZfsVolList struct {
 	VolList  []string `json:"volumeList"`
 }
 
+// MbInt is an int64 that also accepts a JSON string holding a number. The
+// proxy's zfs pool_info builds "total" with str() and passes "used"/"free"
+// through from Redis as-is, so the same field may arrive quoted or unquoted.
+type MbInt int64
+
+func (m *MbInt) UnmarshalJSON(b []byte) error {
+	var raw json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	text := strings.TrimSpace(string(raw))
+	if text == "null" {
+		*m = 0
+		return nil
+	}
+	if unquoted, err := strconv.Unquote(text); err == nil {
+		text = strings.TrimSpace(unquoted)
+	}
+	if text == "" {
+		*m = 0
+		return nil
+	}
+	v, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		f, ferr := strconv.ParseFloat(text, 64)
+		if ferr != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			return fmt.Errorf("MbInt: cannot parse %q as a number: %w", text, err)
+		}
+		v = int64(f)
+	}
+	*m = MbInt(v)
+	return nil
+}
+
+// ZfsPoolInfo mirrors zfs pool_info: total/used/free are in MB.
 type ZfsPoolInfo struct {
 	PoolName string `json:"poolName"`
-	Total    int64  `json:"total"`
-	Used     int64  `json:"used"`
-	Free     int64  `json:"free"`
+	Total    MbInt  `json:"total"`
+	Used     MbInt  `json:"used"`
+	Free     MbInt  `json:"free"`
 	Status   string `json:"status"`
 }
 
 type ZfsVolInfo struct {
-	PoolName string `json:"poolName"`
-	VolName  string `json:"volName"`
-	Total    int64  `json:"total"`
-	Used     int64  `json:"used"`
-	Free     int64  `json:"free"`
-	Status   string `json:"status"`
-	Vip      string `json:"vip"`
-	BaseDir  string `json:"sharePath"`
+	PoolName  string `json:"poolName"`
+	VolName   string `json:"volName"`
+	Total     int64  `json:"total"`
+	Used      int64  `json:"used"`
+	Free      int64  `json:"free"`
+	Status    string `json:"status"`
+	Vip       string `json:"vip"`
+	BaseDir   string `json:"sharePath"`
+	ShareName string `json:"shareName"`
 }
 
 func (fep *FEP) ListZfsPool() ([]string, error) {
@@ -157,8 +205,8 @@ func (fep *FEP) ZfsCreateShareNfs(volId string, volName string, poolName string,
 	params.Set("optionNoRootSquashing", optionNoRootSquashing)
 	params.Set("optionInsecure", optionInsecure)
 
-	// 공유 생성 API 호출 — share name is fixed "share" (volume id = volName, no extra prefix).
-	shareName := ZfsNfsShareName
+	// Share names are global in FlexA, so each CSI volume needs its own name.
+	shareName := ZfsNfsShareName(volId)
 	sharePath := fmt.Sprintf("/%s/%s/%s", poolName, volName, shareName)
 	params.Set("path", sharePath)
 

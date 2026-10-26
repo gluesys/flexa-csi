@@ -114,6 +114,11 @@ func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*model
 		baseDir, err = service.fep.ZfsCreateShareNfs(volId, volName, poolName, secureName, secureAddr, secureSub, nfsAccess, nfsNoRoot, nfsInsecure)
 		if err != nil {
 			log.Errorf("Gluesys FlexA Call(CreateShare) : Fail Create Share in Volume(%s)", volName)
+			if rollbackErr := service.fep.ZfsDeleteVolume(
+				volName, webapi.ZfsNfsShareName(volId), poolName); rollbackErr != nil {
+				log.Errorf("Gluesys FlexA Call(CreateVolume) : Fail Rollback Volume(%s): %v",
+					volName, rollbackErr)
+			}
 			return nil, err
 		}
 	}
@@ -143,6 +148,9 @@ func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*model
 		Size:       spec.Size,
 		Fs:         fs,
 		BaseDir:    baseDir,
+	}
+	if fs == "zfs" {
+		ret.ShareName = webapi.ZfsNfsShareName(volId)
 	}
 
 	log.Infof("Gluesys FlexA Call(CreateVolume) : Success Create Volume(%s)", volName)
@@ -218,6 +226,58 @@ func (service *FlexAService) PoolInfo(poolName string) (interface{}, error) {
 	return poolInfo, nil
 }
 
+func (service *FlexAService) ListLustreClusters() ([]string, error) {
+	clusterList, err := service.fep.LustreListCluster()
+	if err != nil {
+		var out []string
+		log.Error("Gluesys FlexA Call(ListLustreClusters) : Fail")
+		return out, err
+	}
+
+	log.Info("Gluesys FlexA Call(ListLustreClusters) : Success")
+
+	return clusterList, nil
+}
+
+func (service *FlexAService) ListLustreVolumes(clusterName string) ([]string, error) {
+	volList, err := service.fep.LustreListVolume(clusterName)
+
+	if err != nil {
+		var out []string
+		log.Errorf("Gluesys FlexA Call(ListLustreVolumes) : Fail Cluster(%s)", clusterName)
+		return out, err
+	}
+
+	log.Infof("Gluesys FlexA Call(ListLustreVolumes) : Success Cluster(%s)", clusterName)
+
+	return volList, nil
+}
+
+func (service *FlexAService) LustreClusterInfo(clusterName string) (webapi.LustreClusterInfoResponse, error) {
+	clusterInfo, err := service.fep.LustreClusterInfo(clusterName)
+
+	if err != nil {
+		log.Errorf("Gluesys FlexA Call(LustreClusterInfo) : Fail Cluster(%s) Info", clusterName)
+		return webapi.LustreClusterInfoResponse{}, err
+	}
+
+	log.Infof("Gluesys FlexA Call(LustreClusterInfo) : Success Cluster(%s) Info", clusterName)
+
+	return clusterInfo, nil
+}
+
+// LustreVolumeInfo is the public wrapper around fep.LustreInfoVolume for list/stats paths.
+func (service *FlexAService) LustreVolumeInfo(clusterName string, volName string) (webapi.LustreVolumeInfoResponse, error) {
+	volInfo, err := service.fep.LustreInfoVolume(clusterName, volName)
+	if err != nil {
+		return webapi.LustreVolumeInfoResponse{}, err
+	}
+
+	log.Infof("Gluesys FlexA Call(LustreVolumeInfo) : Success Volume(%s) Info", volName)
+
+	return volInfo, nil
+}
+
 func (service *FlexAService) volumeInfo(poolName string, volName string) (webapi.ZfsVolInfo, error) {
 	volInfo, err := service.fep.InfoZfsVol(poolName, volName)
 	if err != nil {
@@ -227,6 +287,11 @@ func (service *FlexAService) volumeInfo(poolName string, volName string) (webapi
 	log.Infof("Gluesys FlexA Call(volumeInfo) : Success Volume(%s) Info", volName)
 
 	return volInfo, nil
+}
+
+// VolumeInfo is the public wrapper around volumeInfo for ZFS volumes (list/stats paths).
+func (service *FlexAService) VolumeInfo(poolName string, volName string) (webapi.ZfsVolInfo, error) {
+	return service.volumeInfo(poolName, volName)
 }
 
 func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName string) *models.K8sVolumeRespSpec {
@@ -299,14 +364,16 @@ func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName 
 
 			info := &models.K8sVolumeRespSpec{
 				Vip:        vip,
+				VolumeId:   volName,
 				VolumeName: volInfo.VolName,
 				PoolName:   volInfo.PoolName,
 				// ZFS volume_info returns total/used/free in MB. Convert to bytes for CSI.
-				Size:    volInfo.Total * utils.UNIT_MB,
-				Used:    volInfo.Used * utils.UNIT_MB,
-				Free:    volInfo.Free * utils.UNIT_MB,
-				Fs:      "zfs",
-				BaseDir: volInfo.BaseDir,
+				Size:      volInfo.Total * utils.UNIT_MB,
+				Used:      volInfo.Used * utils.UNIT_MB,
+				Free:      volInfo.Free * utils.UNIT_MB,
+				Fs:        "zfs",
+				BaseDir:   volInfo.BaseDir,
+				ShareName: volInfo.ShareName,
 			}
 
 			log.Infof("Gluesys FlexA Call(GetVolume) : Success Volume(%s)", volName)

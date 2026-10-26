@@ -60,23 +60,6 @@ spec:
           volumeMounts:
             - name: socket-dir
               mountPath: /var/lib/csi/sockets/pluginproxy/
-        - name: csi-attacher
-          securityContext:
-            privileged: true
-            capabilities:
-              add: ["SYS_ADMIN"]
-            allowPrivilegeEscalation: true
-          image: "{{ .Values.sidecars.attacher.repository }}:{{ .Values.sidecars.attacher.tag }}"
-          args:
-            - --v=5
-            - --csi-address=$(ADDRESS)
-          env:
-            - name: ADDRESS
-              value: /var/lib/csi/sockets/pluginproxy/csi.sock
-          imagePullPolicy: {{ .Values.sidecars.attacher.pullPolicy }}
-          volumeMounts:
-            - name: socket-dir
-              mountPath: /var/lib/csi/sockets/pluginproxy/
         - name: csi-resizer
           securityContext:
             privileged: true
