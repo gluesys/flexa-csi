@@ -53,6 +53,9 @@ spec:
             - --csi-address=$(ADDRESS)
             - --v=5
             - --extra-create-metadata
+            - --worker-threads={{ .Values.controller.provisioner.workerThreads }}
+            - --kube-api-qps={{ .Values.controller.provisioner.kubeApiQps }}
+            - --kube-api-burst={{ .Values.controller.provisioner.kubeApiBurst }}
           env:
             - name: ADDRESS
               value: /var/lib/csi/sockets/pluginproxy/csi.sock
@@ -90,6 +93,8 @@ spec:
             - --client-info
             - /etc/flexa/client-info.yml
             - --log-level={{ .Values.logLevel }}
+            - --kube-api-qps={{ .Values.controller.kubeApiQps }}
+            - --kube-api-burst={{ .Values.controller.kubeApiBurst }}
           env:
             - name: CSI_ENDPOINT
               value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock

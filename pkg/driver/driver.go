@@ -60,6 +60,13 @@ type Driver struct {
 	clientInfo atomic.Value // *common.ClientInfoConfig
 }
 
+// KubeAPIQPS, KubeAPIBurst 는 드라이버가 쓰는 쿠버네티스 클라이언트의 속도 제한이다.
+// CreateVolume 마다 PVC 를 한 번 조회하므로, client-go 기본값(5/10)이면 동시 생성이 초당 5건에서 막힌다.
+var (
+	KubeAPIQPS   float32 = 50
+	KubeAPIBurst         = 100
+)
+
 func NewControllerAndNodeDriver(nodeID string, endpoint string, flxService interfaces.FlexAService) (*Driver, error) {
 	log.Debugf("NewControllerAndNodeDriver: DriverName: %v, DriverVersion: %v", DriverName, DriverVersion)
 
@@ -67,6 +74,8 @@ func NewControllerAndNodeDriver(nodeID string, endpoint string, flxService inter
 	if err != nil {
 		return nil, err
 	}
+	conf.QPS = KubeAPIQPS
+	conf.Burst = KubeAPIBurst
 
 	client, err := kubernetes.NewForConfig(conf)
 	if err != nil {

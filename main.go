@@ -132,6 +132,8 @@ func addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().BoolVarP(&webapiDebug, "debug", "d", webapiDebug, "Enable webapi debugging logs")
 	cmd.PersistentFlags().BoolVar(&multipathForUC, "multipath", multipathForUC, "Set to 'false' to disable multipath for UC")
 	cmd.PersistentFlags().BoolVar(&nfsLockDaemons, "nfs-lock-daemons", nfsLockDaemons, "Start and supervise rpcbind/rpc.statd for NFSv3 locking (node plugin)")
+	cmd.PersistentFlags().Float32Var(&driver.KubeAPIQPS, "kube-api-qps", driver.KubeAPIQPS, "QPS of the Kubernetes API client (one PVC GET per CreateVolume)")
+	cmd.PersistentFlags().IntVar(&driver.KubeAPIBurst, "kube-api-burst", driver.KubeAPIBurst, "Burst of the Kubernetes API client")
 
 	cmd.Flags().SortFlags = false
 	cmd.PersistentFlags().SortFlags = false

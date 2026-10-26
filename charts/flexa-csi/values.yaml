@@ -29,6 +29,14 @@ sidecars:
 
 controller:
   replicas: 1
+  # 드라이버(csi-plugin)의 쿠버네티스 클라이언트 속도 제한. CreateVolume 마다 PVC 를 한 번 조회한다.
+  kubeApiQps: 50
+  kubeApiBurst: 100
+  # external-provisioner 의 동시 처리 수와 쿠버네티스 클라이언트 속도 제한
+  provisioner:
+    workerThreads: 100
+    kubeApiQps: 50
+    kubeApiBurst: 100
   hostNetwork: true
   labels: {}
   podAnnotations: {}
