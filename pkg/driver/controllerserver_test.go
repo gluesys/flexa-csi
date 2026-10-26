@@ -66,8 +66,13 @@ func reply(w http.ResponseWriter, code int, data interface{}, msg string) {
 func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.calls = append(p.calls, r.Method+" "+r.URL.Path)
-	seg := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	path, ok := strings.CutPrefix(r.URL.Path, "/csi/")
+	if !ok {
+		reply(w, 404, nil, "not under /csi")
+		return
+	}
+	p.calls = append(p.calls, r.Method+" /"+path)
+	seg := strings.Split(strings.Trim(path, "/"), "/")
 	var body map[string]string
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
@@ -458,5 +463,30 @@ func TestExpandVolumeChecks(t *testing.T) {
 		VolumeId: "pvc-gone", CapacityRange: &csi.CapacityRange{RequiredBytes: utils.UNIT_GB}})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expand of a missing volume = %v, want NotFound", err)
+	}
+}
+
+func TestProxyForVolumeTakesTokenFromClientInfo(t *testing.T) {
+	d := &Driver{}
+	d.SetClientInfoConfig(&common.ClientInfoConfig{
+		Default:  &common.ProxyInfo{Host: "10.0.0.1", Port: 9001, Token: "top"},
+		Profiles: map[string]common.ProxyInfo{"b": {Host: "10.0.0.2", Port: 9001, Token: "b-tok"}},
+	})
+	cases := []struct {
+		attrs     map[string]string
+		host, tok string
+	}{
+		{map[string]string{volAttrProxyIP: "10.0.0.2", volAttrProxyPort: "9001", volAttrProxyProfile: "b"}, "10.0.0.2", "b-tok"},
+		{map[string]string{volAttrProxyIP: "10.0.0.1", volAttrProxyPort: "9001"}, "10.0.0.1", "top"},
+		{map[string]string{volAttrProxyProfile: "b"}, "10.0.0.2", "b-tok"},
+		{map[string]string{}, "10.0.0.1", "top"},
+		// An address that matches no client-info entry never gets a token.
+		{map[string]string{volAttrProxyIP: "10.9.9.9", volAttrProxyPort: "9001", volAttrProxyProfile: "b"}, "10.9.9.9", ""},
+	}
+	for i, c := range cases {
+		p, err := d.ProxyForVolume(c.attrs)
+		if err != nil || p.Host != c.host || p.Token != c.tok {
+			t.Errorf("case %d: proxy=%+v err=%v, want %s/%s", i, p, err, c.host, c.tok)
+		}
 	}
 }

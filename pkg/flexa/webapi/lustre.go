@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"strings"
 
@@ -204,7 +203,7 @@ func (fep *FEP) LustreExpandVolume(clusterName string, volName string, newSizeBy
 }
 
 func (fep *FEP) lustrePost(cgiPath string, body map[string]string) (LustreVolumeCreateResponse, error) {
-	cgiUrl := fmt.Sprintf("http://%s:%d/%s", fep.Ip, fep.Port, cgiPath)
+	cgiUrl := fep.apiURL(cgiPath)
 	log.Infof("Gluesys FlexA Webapi Call Path : %s", cgiUrl)
 
 	payload, err := json.Marshal(body)
@@ -212,11 +211,10 @@ func (fep *FEP) lustrePost(cgiPath string, body map[string]string) (LustreVolume
 		return LustreVolumeCreateResponse{}, err
 	}
 
-	req, err := http.NewRequest("POST", cgiUrl, bytes.NewBuffer(payload))
+	req, err := fep.newRequest("POST", cgiUrl, bytes.NewBuffer(payload))
 	if err != nil {
 		return LustreVolumeCreateResponse{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {

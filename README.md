@@ -74,7 +74,15 @@ Contents: [client-info / Secret](#client-info--secret) · [StorageClasses](#crea
 
 **Helm:** Configure proxy endpoints in `charts/flexa-csi/values.yaml` (`clientInfo.content`) or use `-f` / `--set-file` as described in [Installation](#installation).
 
-**Raw manifests:** Prepare `config/client-info.yml` with `profiles` (`proxyIP`, `proxyPort`, optional `mountIP` for VIP resolve). See the template at [`config/client-info-template.yml`](config/client-info-template.yml).
+**Token:** provisiond rejects `/csi` requests without a valid client token (HTTP 401). Issue one per Kubernetes cluster on the storage's MGMT_VIP controller and put it in `client-info.yml` as `token` (top level, or per profile when profiles point to different storage):
+
+```bash
+cd /anystor/provision && python3.12 -m provisiond.ctl client-token create --name csi-<cluster>
+```
+
+The token is printed once. With Helm, pass it as `--set clientInfo.token=<token>`. To rotate, issue a new token with the same name and update the Secret; the driver reloads it without a restart, and existing volumes pick it up because the token is looked up by proxy address, not stored in the PV.
+
+**Raw manifests:** Prepare `config/client-info.yml` with `token` and `profiles` (`proxyIP`, `proxyPort`, optional `mountIP` for VIP resolve). See the template at [`config/client-info-template.yml`](config/client-info-template.yml).
 
 #### Creating the Secret manually
 
@@ -83,6 +91,7 @@ Use when not using Helm, or when you pre-create the Secret for Helm (`clientInfo
 1. Example `config/client-info.yml`:
 
    ```yaml
+   token: "<provisiond csi token>"
    profiles:
      zfs:
        proxyIP: 10.0.0.11

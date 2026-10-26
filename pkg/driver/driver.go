@@ -18,6 +18,7 @@ package driver
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -162,6 +163,25 @@ func (d *Driver) SelectProxy(profile string) (*common.ProxyInfo, error) {
 		return cfg.Default, nil
 	}
 	return nil, fmt.Errorf("no proxyProfile specified and legacy default host/port is not configured in client-info")
+}
+
+// ProxyForVolume picks the proxy for an existing volume: explicit volume
+// attributes first, then its proxyProfile, then the legacy default. Volume
+// attributes never hold the token, so it always comes from client-info.
+func (d *Driver) ProxyForVolume(attrs map[string]string) (*common.ProxyInfo, error) {
+	profile := strings.TrimSpace(attrs[volAttrProxyProfile])
+	proxy, ok := proxyFromVolumeAttributes(attrs)
+	if !ok {
+		return d.SelectProxy(profile)
+	}
+	proxy.Token = d.GetClientInfoConfig().TokenFor(proxy.Host, proxy.Port, profile)
+	if proxy.Token == "" {
+		// The volume's proxy address matches no client-info entry (e.g. proxyIP changed
+		// after the volume was created). The token is never sent to an unknown address.
+		log.Warnf("no client-info token for volume proxy %s:%d (profile %q); add a profile for this address",
+			proxy.Host, proxy.Port, profile)
+	}
+	return proxy, nil
 }
 
 // TODO: func NewNodeDriver() {}

@@ -42,6 +42,7 @@ func (service *FlexAService) SetFep(proxy *common.ProxyInfo) {
 		Ip:      proxy.Host,
 		Port:    proxy.Port,
 		MountIP: proxy.MountIP,
+		Token:   proxy.Token,
 	}
 
 	service.fep = fep

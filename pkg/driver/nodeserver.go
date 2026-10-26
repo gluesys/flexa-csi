@@ -476,16 +476,11 @@ func lustreUmountViaHost(ctx context.Context, target string) error {
 }
 
 func (ns *NodeServer) resolveProxyFEP(volCtx map[string]string) (*webapi.FEP, error) {
-	proxy, ok := proxyFromVolumeAttributes(volCtx)
-	if !ok {
-		proxyProfile := strings.TrimSpace(volCtx[volAttrProxyProfile])
-		p, err := ns.Driver.SelectProxy(proxyProfile)
-		if err != nil {
-			return nil, err
-		}
-		proxy = p
+	proxy, err := ns.Driver.ProxyForVolume(volCtx)
+	if err != nil {
+		return nil, err
 	}
-	return &webapi.FEP{Ip: proxy.Host, Port: proxy.Port, MountIP: proxy.MountIP}, nil
+	return &webapi.FEP{Ip: proxy.Host, Port: proxy.Port, MountIP: proxy.MountIP, Token: proxy.Token}, nil
 }
 
 func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
@@ -807,13 +802,9 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 		return nil, err
 	}
 
-	proxy, ok := proxyFromVolumeAttributes(attrs)
-	if !ok {
-		p, err := ns.Driver.SelectProxy(strings.TrimSpace(attrs[volAttrProxyProfile]))
-		if err != nil {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
-		}
-		proxy = p
+	proxy, err := ns.Driver.ProxyForVolume(attrs)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	reqService := service.NewFlexAService()
 	reqService.SetFep(proxy)

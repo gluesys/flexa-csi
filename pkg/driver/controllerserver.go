@@ -164,13 +164,9 @@ func (cs *ControllerServer) volumeAttributes(ctx context.Context, volumeID strin
 // serviceForAttrs builds the proxy client for an existing volume: explicit
 // attributes first, then its proxyProfile, then the legacy default.
 func (cs *ControllerServer) serviceForAttrs(attrs map[string]string) (*service.FlexAService, error) {
-	proxy, ok := proxyFromVolumeAttributes(attrs)
-	if !ok {
-		p, err := cs.Driver.SelectProxy(strings.TrimSpace(attrs[volAttrProxyProfile]))
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
-		}
-		proxy = p
+	proxy, err := cs.Driver.ProxyForVolume(attrs)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	reqService := service.NewFlexAService()
 	reqService.SetFep(proxy)

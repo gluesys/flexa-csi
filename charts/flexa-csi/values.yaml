@@ -91,6 +91,14 @@ clientInfo:
   # If true, chart creates the Secret from `content` (development / single-step install).
   # If false, create the Secret yourself before install: kubectl create secret generic ...
   create: true
+  # provisiond client token, sent as "Authorization: Bearer <token>" on every request.
+  # Issue it on the storage (MGMT_VIP controller):
+  #   cd /anystor/provision && python3.12 -m provisiond.ctl client-token create --name csi-<cluster>
+  # Written as the top-level `token` of client-info.yml; profiles without their own
+  # `token` use it. Prefer --set clientInfo.token=... over committing it to a values file.
+  # Use either this or a top-level `token:` in content, not both. Per-profile tokens go in content.
+  # Rotation without 401s: create csi-<cluster>-2, update the Secret, then delete the old name.
+  token: ""
   content: |
     profiles:
       zfs:

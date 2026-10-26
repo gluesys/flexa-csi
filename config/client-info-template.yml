@@ -1,5 +1,10 @@
 # client-info.yml — proxy profiles (select per StorageClass via parameters.proxyProfile).
 # Each profile requires proxyIP and proxyPort; mountIP is optional (VIP resolve for NFS).
+# token: provisiond client token (Authorization: Bearer). Issue it on the storage with
+#   cd /anystor/provision && python3.12 -m provisiond.ctl client-token create --name csi-<cluster>
+# The top-level token applies to every profile without its own `token`.
+
+token: "<provisiond csi token>"
 
 profiles:
   zfs:

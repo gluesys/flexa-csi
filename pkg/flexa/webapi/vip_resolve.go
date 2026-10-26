@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 )
 
@@ -42,17 +41,16 @@ func (fep *FEP) ResolveLustreVip(refIP string) (string, error) {
 }
 
 func (fep *FEP) postVipResolve(cgiPath, refIP string) (string, error) {
-	cgiURL := fmt.Sprintf("http://%s:%d/%s", fep.Ip, fep.Port, cgiPath)
+	cgiURL := fep.apiURL(cgiPath)
 	body := map[string]string{"ip": refIP}
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequest("POST", cgiURL, bytes.NewBuffer(payload))
+	req, err := fep.newRequest("POST", cgiURL, bytes.NewBuffer(payload))
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
