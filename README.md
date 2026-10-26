@@ -156,6 +156,7 @@ allowVolumeExpansion: true
 | *clusterName* | For `fs=lustre` | Lustre cluster name. |
 | *protocol* | Typically set | e.g. `nfs`. |
 | *proxyProfile* | Optional | Profile name under `profiles` in `client-info`. When set, the driver uses that profile’s `proxyIP`, `proxyPort`, and `mountIP`. |
+| *flexa.io/&lt;option&gt;* | Optional | Default for a [PVC annotation](#pvc-annotations) with the same name, e.g. `flexa.io/optionComp: "on"`. Used only when the PVC does not set that annotation. With Helm, set `storageClass.<key>.volumeDefaults` (keys without the `flexa.io/` prefix). |
 
 Volume expansion is **expand-only**. Shrink (reducing requested size) is not supported.
 
@@ -167,19 +168,20 @@ kubectl apply -f <storageclass_yaml>
 
 ### PVC annotations
 
-The controller reads **PersistentVolumeClaim** annotations with the `flexa.io/` prefix at volume creation. Examples: [`deploy/kubernetes/pvc_zfs.yaml`](deploy/kubernetes/pvc_zfs.yaml), [`deploy/kubernetes/pvc_lustre.yaml`](deploy/kubernetes/pvc_lustre.yaml).
+The controller reads **PersistentVolumeClaim** annotations with the `flexa.io/` prefix at volume creation. If a PVC does not set an annotation, the StorageClass parameter with the same name is used; if neither is set, the FlexA proxy default applies. Examples: [`deploy/kubernetes/pvc_zfs.yaml`](deploy/kubernetes/pvc_zfs.yaml), [`deploy/kubernetes/pvc_lustre.yaml`](deploy/kubernetes/pvc_lustre.yaml).
 
 | Annotation | Purpose (summary) |
 | ---------- | ----------------- |
-| `flexa.io/optionISS` | Instant secure sync (ZFS). |
-| `flexa.io/optionSVS` | Secure volume service (ZFS). |
-| `flexa.io/optionComp` | Compression (ZFS). |
-| `flexa.io/optionDedup` | Deduplication (ZFS). |
+| `flexa.io/optionISS` | Include Snapshot Space (ZFS). `on`: snapshots count toward the size (`quota`, `reservation`). `off`: they do not (`refquota`, `refreservation`). Proxy default `on`. |
+| `flexa.io/optionSVS` | Shared Volume Space (ZFS). `on`: no space is reserved; the volume shares free pool space. `off`: the full size is reserved. Proxy default `off`. |
+| `flexa.io/optionComp` | Compression (ZFS). Proxy default `off`. |
+| `flexa.io/optionDedup` | Deduplication (ZFS). Proxy default `off`. |
 | `flexa.io/secureAddress` | Secure network address for export. |
 | `flexa.io/secureSubnet` | Secure network mask. |
 | `flexa.io/nfsAccess` | NFS access mode (e.g. RW). |
 | `flexa.io/nfsNoRootSquashing` | NFS root squashing. |
 | `flexa.io/nfsInsecure` | NFS insecure port. |
+| `flexa.io/pvcQos` | Lustre PVC QoS (FlexA 1.5 or later). |
 
 Use values such as `"on"` / `"off"` or addresses as in the samples; follow Gluesys FlexA documentation for your environment.
 

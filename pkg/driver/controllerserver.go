@@ -143,32 +143,30 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, fmt.Errorf("Failed to get pvc %s/%s: %v", pvcNS, pvcName, err)
 	}
 
-	var optionSVS, optionISS, optionComp, optionDedup string
+	// 볼륨 옵션: PVC 어노테이션이 있으면 그 값, 없으면 StorageClass 의 같은 이름 파라미터.
+	params := req.GetParameters()
+	opt := func(key string) string { return volumeOption(pvc.Annotations, params, key) }
 
-	optionSVS = pvc.Annotations["flexa.io/optionSVS"]
-	optionISS = pvc.Annotations["flexa.io/optionISS"]
-	optionComp = pvc.Annotations["flexa.io/optionComp"]
-	optionDedup = pvc.Annotations["flexa.io/optionDedup"]
+	optionSVS := opt("flexa.io/optionSVS")
+	optionISS := opt("flexa.io/optionISS")
+	optionComp := opt("flexa.io/optionComp")
+	optionDedup := opt("flexa.io/optionDedup")
 
 	log.Infof("Volume Options : optionSVS(%s), optionISS(%s), optionComp(%s), optionDedup(%s)", optionSVS, optionISS, optionComp, optionDedup)
 
-	var secureName, secureAddr, secureSub string
-
-	secureName = fmt.Sprintf("zone_%s", pvcName)
-	secureAddr = pvc.Annotations["flexa.io/secureAddress"]
-	secureSub = pvc.Annotations["flexa.io/secureSubnet"]
+	secureName := fmt.Sprintf("zone_%s", pvcName)
+	secureAddr := opt("flexa.io/secureAddress")
+	secureSub := opt("flexa.io/secureSubnet")
 
 	log.Infof("Share Secure Zone : name(%s) Address(%s) Subnet(%s)", secureName, secureAddr, secureSub)
 
-	var nfsAccess, nfsNoRoot, nfsInsecure string
-
-	nfsAccess = pvc.Annotations["flexa.io/nfsAccess"]
-	nfsNoRoot = pvc.Annotations["flexa.io/nfsNoRootSquashing"]
-	nfsInsecure = pvc.Annotations["flexa.io/nfsInsecure"]
+	nfsAccess := opt("flexa.io/nfsAccess")
+	nfsNoRoot := opt("flexa.io/nfsNoRootSquashing")
+	nfsInsecure := opt("flexa.io/nfsInsecure")
 
 	log.Infof("NFS Secure : Access(%s) NoRootSquashing(%s) Insecure(%s)", nfsAccess, nfsNoRoot, nfsInsecure)
 
-	pvcQos := strings.TrimSpace(pvc.Annotations[volAttrPvcQos])
+	pvcQos := opt(volAttrPvcQos)
 	log.Infof("PVC QoS : %s", pvcQos)
 
 	if volName == "" {
@@ -186,8 +184,6 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			return nil, status.Errorf(codes.InvalidArgument, "Invalid volume capability access mode")
 		}
 	}
-
-	params := req.GetParameters()
 
 	poolName := params["poolName"]
 	fs := params["fs"]

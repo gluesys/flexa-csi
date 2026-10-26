@@ -95,6 +95,13 @@ storageClass:
     proxyProfile: zfs
     poolName: k8sA
     protocol: nfs
+    # Defaults for PVCs of this class. A PVC annotation with the same name
+    # (flexa.io/<key>) overrides the value. Keys: optionISS, optionSVS,
+    # optionComp, optionDedup, secureAddress, secureSubnet, nfsAccess,
+    # nfsNoRootSquashing, nfsInsecure, pvcQos.
+    volumeDefaults: {}
+    #   optionISS: "on"
+    #   optionComp: "off"
   zfs_poolB:
     enabled: false
     name: flexa-sc-zfs-b
