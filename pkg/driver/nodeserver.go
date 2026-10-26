@@ -731,14 +731,15 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 		return &csi.NodeUnpublishVolumeResponse{}, nil
 	case metaErr != nil:
 		// An unreadable meta (e.g. left half-written by an older driver) must not
-		// block teardown forever: drop it and release every group mount of this
-		// volume that no remaining target uses.
+		// block teardown forever: release every group mount of this volume that no
+		// remaining target uses (unreadable metas do not count), then drop the meta.
+		// The meta goes last so that a failed release is retried on the next call.
 		log.Warnf("NodeUnpublishVolume: dropping unreadable meta of %s: %v", targetPath, metaErr)
-		if err := ns.deleteNfsVolMeta(volumeId, targetPath); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to remove broken meta: %v", err)
-		}
 		if err := ns.releaseUnusedGroups(volumeId); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to release group mounts: %v", err)
+		}
+		if err := ns.deleteNfsVolMeta(volumeId, targetPath); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to remove broken meta: %v", err)
 		}
 		return &csi.NodeUnpublishVolumeResponse{}, nil
 	}

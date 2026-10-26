@@ -330,6 +330,45 @@ func TestUnpublishSurvivesCorruptMeta(t *testing.T) {
 	}
 }
 
+func TestCorruptMetaReleaseIsRetried(t *testing.T) {
+	fm := mount.NewFakeMounter(nil)
+	ns, root := newTestNodeServer(t, fm, nfsPod("a", nil))
+	ctx := context.Background()
+	target := filepath.Join(root, "t1")
+	if _, err := ns.NodePublishVolume(ctx, nfsPublishReq("pvc-1", target, "a", false,
+		csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER)); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	group := ns.getNfsGroupPath("pvc-1", nil)
+	if err := os.WriteFile(ns.metaFile("pvc-1", target), []byte(`{"VolumeId":"pv`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	fm.UnmountFunc = func(path string) error {
+		if path == group {
+			return syscall.EBUSY
+		}
+		return nil
+	}
+	req := &csi.NodeUnpublishVolumeRequest{VolumeId: "pvc-1", TargetPath: target}
+	if _, err := ns.NodeUnpublishVolume(ctx, req); status.Code(err) != codes.Internal {
+		t.Fatalf("unpublish with busy group = %v, want Internal", err)
+	}
+	// The meta stays so that the retry still knows a group may need releasing.
+	if _, err := os.Stat(ns.metaFile("pvc-1", target)); err != nil {
+		t.Fatalf("corrupt meta dropped before the group was released: %v", err)
+	}
+	fm.UnmountFunc = nil
+	if _, err := ns.NodeUnpublishVolume(ctx, req); err != nil {
+		t.Fatalf("retry unpublish: %v", err)
+	}
+	if _, ok := mountedAt(fm, group); ok {
+		t.Fatal("group mount leaked after retry")
+	}
+	if _, err := os.Stat(ns.metaFile("pvc-1", target)); !os.IsNotExist(err) {
+		t.Fatalf("corrupt meta still there: %v", err)
+	}
+}
+
 func TestCorruptMetaSweepKeepsGroupsInUse(t *testing.T) {
 	fm := mount.NewFakeMounter(nil)
 	ns, root := newTestNodeServer(t, fm, nfsPod("a", nil), nfsPod("b", nil))
