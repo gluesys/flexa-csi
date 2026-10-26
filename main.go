@@ -16,6 +16,7 @@ import (
 	"github.com/gluesys/flexa-csi/pkg/driver"
 	"github.com/gluesys/flexa-csi/pkg/flexa/common"
 	"github.com/gluesys/flexa-csi/pkg/flexa/service"
+	"github.com/gluesys/flexa-csi/pkg/flexa/webapi"
 	"github.com/gluesys/flexa-csi/pkg/logger"
 	"github.com/gluesys/flexa-csi/pkg/webhook"
 )
@@ -35,6 +36,7 @@ var (
 	webapiDebug    = false
 	multipathForUC = true
 	nfsLockDaemons = false
+	proxyTimeout   = webapi.DefaultRequestTimeout
 )
 
 var rootCmd = &cobra.Command{
@@ -78,6 +80,7 @@ var rootCmd = &cobra.Command{
 
 func driverStart() error {
 	log.Infof("CSI Options = {%s, %s, %s}", csiNodeID, csiEndpoint, csiClientInfoPath)
+	webapi.SetRequestTimeout(proxyTimeout)
 
 	flxService := service.NewFlexAService()
 
@@ -134,6 +137,7 @@ func addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().BoolVar(&nfsLockDaemons, "nfs-lock-daemons", nfsLockDaemons, "Start and supervise rpcbind/rpc.statd for NFSv3 locking (node plugin)")
 	cmd.PersistentFlags().Float32Var(&driver.KubeAPIQPS, "kube-api-qps", driver.KubeAPIQPS, "QPS of the Kubernetes API client (one PVC GET per CreateVolume)")
 	cmd.PersistentFlags().IntVar(&driver.KubeAPIBurst, "kube-api-burst", driver.KubeAPIBurst, "Burst of the Kubernetes API client")
+	cmd.PersistentFlags().DurationVar(&proxyTimeout, "proxy-timeout", proxyTimeout, "Upper bound for one FlexA proxy call; the volume stays locked until the call ends")
 
 	cmd.Flags().SortFlags = false
 	cmd.PersistentFlags().SortFlags = false

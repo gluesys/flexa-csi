@@ -110,17 +110,58 @@ func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*model
 			return nil, err
 		}
 
-		//Create Share
-		baseDir, err = service.fep.ZfsCreateShareNfs(volId, volName, poolName, secureName, secureAddr, secureSub, nfsAccess, nfsNoRoot, nfsInsecure)
+		baseDir, err = service.createZfsShare(spec)
 		if err != nil {
-			log.Errorf("Gluesys FlexA Call(CreateShare) : Fail Create Share in Volume(%s)", volName)
-			if rollbackErr := service.fep.ZfsDeleteVolume(
-				volName, webapi.ZfsNfsShareName(volId), poolName); rollbackErr != nil {
+			// The share was not created, so only the dataset is rolled back. Going
+			// through ZfsDeleteVolume would stop at the missing share.
+			if rollbackErr := service.fep.ZfsDestroyVolume(volName, poolName); rollbackErr != nil {
 				log.Errorf("Gluesys FlexA Call(CreateVolume) : Fail Rollback Volume(%s): %v",
 					volName, rollbackErr)
 			}
 			return nil, err
 		}
+	}
+
+	return service.volumeResponse(spec, baseDir, refForVip)
+}
+
+// CreateZfsShare finishes a ZFS volume whose dataset exists but whose NFS share
+// does not (an earlier create stopped between the two calls).
+func (service *FlexAService) CreateZfsShare(spec *models.CreateVolumeSpec) (*models.K8sVolumeRespSpec, error) {
+	refForVip := service.fep.VipResolveRefIP()
+	if refForVip == "" {
+		return nil, fmt.Errorf("VIP resolve reference is empty; check client-info host")
+	}
+	baseDir, err := service.createZfsShare(spec)
+	if webapi.IsAlreadyExists(err) {
+		// The legacy proxy reports no share path in volume info, so an earlier
+		// attempt may have finished the share already; take its path.
+		baseDir, err = service.fep.ZfsSharePath(spec.PoolName, spec.VolumeName, webapi.ZfsNfsShareName(spec.VolumeId))
+	}
+	if err != nil {
+		return nil, err
+	}
+	return service.volumeResponse(spec, baseDir, refForVip)
+}
+
+func (service *FlexAService) createZfsShare(spec *models.CreateVolumeSpec) (string, error) {
+	baseDir, err := service.fep.ZfsCreateShareNfs(spec.VolumeId, spec.VolumeName, spec.PoolName,
+		spec.SecureName, spec.SecureAddr, spec.SecureSub, spec.NfsAccess, spec.NfsNoRoot, spec.NfsInsecure)
+	if err != nil {
+		log.Errorf("Gluesys FlexA Call(CreateShare) : Fail Create Share in Volume(%s)", spec.VolumeName)
+		return "", err
+	}
+	return baseDir, nil
+}
+
+func (service *FlexAService) volumeResponse(spec *models.CreateVolumeSpec, baseDir string, refForVip string) (*models.K8sVolumeRespSpec, error) {
+	volId, volName, poolName := spec.VolumeId, spec.VolumeName, spec.PoolName
+	if volName == "test-vol" {
+		volId = "test-vol"
+	}
+	fs := spec.Fs
+	if fs == "" {
+		fs = "zfs"
 	}
 
 	var vip string
@@ -294,10 +335,12 @@ func (service *FlexAService) VolumeInfo(poolName string, volName string) (webapi
 	return service.volumeInfo(poolName, volName)
 }
 
-func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName string) *models.K8sVolumeRespSpec {
+// GetVolume returns (nil, nil) when the volume does not exist and an error when
+// the proxy could not answer, so callers never mistake an outage for "gone".
+func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName string) (*models.K8sVolumeRespSpec, error) {
 	refForVip := service.fep.VipResolveRefIP()
 	if refForVip == "" {
-		return nil
+		return nil, fmt.Errorf("VIP resolve reference is empty; check client-info host")
 	}
 
 	fs = strings.TrimSpace(fs)
@@ -309,17 +352,19 @@ func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName 
 		clusterName := strings.TrimSpace(poolOrCluster)
 		v := strings.TrimSpace(volName)
 		if clusterName == "" || v == "" {
-			log.Errorf("Gluesys FlexA Call(GetVolume): empty clusterName or volName for lustre")
-			return nil
+			return nil, fmt.Errorf("empty clusterName or volName for lustre volume %q", volName)
 		}
 		info, err := service.fep.LustreInfoVolume(clusterName, v)
+		if webapi.IsMissing(err, "Share("+v+")") {
+			return nil, nil
+		}
 		if err != nil {
-			return nil
+			return nil, err
 		}
 		vip, err := service.fep.ResolveLustreVip(refForVip)
 		if err != nil {
 			log.Errorf("Gluesys FlexA Call(GetVolume) : Lustre VIP resolve failed: %v", err)
-			return nil
+			return nil, err
 		}
 		sizeBytes := int64(0)
 		if info.Quota.LimitMb > 0 {
@@ -333,56 +378,62 @@ func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName 
 			Size:       sizeBytes,
 			Fs:         "lustre",
 			BaseDir:    info.Path,
-		}
+		}, nil
 	}
 
 	poolName := strings.TrimSpace(poolOrCluster)
 	if poolName == "" {
-		log.Errorf("Gluesys FlexA Call(GetVolume): empty poolName for ZFS volume %q", volName)
-		return nil
+		return nil, fmt.Errorf("empty poolName for ZFS volume %q", volName)
 	}
 
 	vols, err := service.ListVolumes(poolName)
-
+	if webapi.IsMissing(err, "Pool("+poolName+")") {
+		// The pool itself is gone, so the volume is too.
+		return nil, nil
+	}
 	if err != nil {
 		log.Errorf("Gluesys FlexA Call(GetVolume) : Fail Volume(%s)", volName)
-		return nil
+		return nil, err
 	}
 
 	for _, vol := range vols {
-		if vol == volName {
-			volInfo, err := service.volumeInfo(poolName, volName)
-			if err != nil {
-				return nil
-			}
-
-			vip, err := service.fep.ResolveZfsVip(poolName, refForVip)
-			if err != nil {
-				log.Errorf("Gluesys FlexA Call(GetVolume) : ZFS VIP resolve failed: %v", err)
-				return nil
-			}
-
-			info := &models.K8sVolumeRespSpec{
-				Vip:        vip,
-				VolumeId:   volName,
-				VolumeName: volInfo.VolName,
-				PoolName:   volInfo.PoolName,
-				// ZFS volume_info returns total/used/free in MB. Convert to bytes for CSI.
-				Size:      volInfo.Total * utils.UNIT_MB,
-				Used:      volInfo.Used * utils.UNIT_MB,
-				Free:      volInfo.Free * utils.UNIT_MB,
-				Fs:        "zfs",
-				BaseDir:   volInfo.BaseDir,
-				ShareName: volInfo.ShareName,
-			}
-
-			log.Infof("Gluesys FlexA Call(GetVolume) : Success Volume(%s)", volName)
-
-			return info
+		if vol != volName {
+			continue
 		}
+		volInfo, err := service.volumeInfo(poolName, volName)
+		if webapi.IsMissing(err, "Volume("+volName+")") {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		vip, err := service.fep.ResolveZfsVip(poolName, refForVip)
+		if err != nil {
+			log.Errorf("Gluesys FlexA Call(GetVolume) : ZFS VIP resolve failed: %v", err)
+			return nil, err
+		}
+
+		info := &models.K8sVolumeRespSpec{
+			Vip:        vip,
+			VolumeId:   volName,
+			VolumeName: volInfo.VolName,
+			PoolName:   volInfo.PoolName,
+			// ZFS volume_info returns total/used/free in MB. Convert to bytes for CSI.
+			Size:      volInfo.Total * utils.UNIT_MB,
+			Used:      volInfo.Used * utils.UNIT_MB,
+			Free:      volInfo.Free * utils.UNIT_MB,
+			Fs:        "zfs",
+			BaseDir:   volInfo.BaseDir,
+			ShareName: volInfo.ShareName,
+		}
+
+		log.Infof("Gluesys FlexA Call(GetVolume) : Success Volume(%s)", volName)
+
+		return info, nil
 	}
 
-	return nil
+	return nil, nil
 }
 
 func (service *FlexAService) ExpandVolume(fs string, poolOrCluster string, volName string, newSizeBytes int64) error {

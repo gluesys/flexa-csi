@@ -47,6 +47,7 @@ func NewControllerServer(d *Driver) *ControllerServer {
 	return &ControllerServer{
 		Driver:     d,
 		FlxService: d.FlxService,
+		locks:      newVolumeLocks(),
 	}
 }
 
@@ -59,6 +60,7 @@ func NewNodeServer(d *Driver) *NodeServer {
 			Exec:      exec.New(),
 		},
 		Client: nil,
+		locks:  newVolumeLocks(),
 	}
 }
 

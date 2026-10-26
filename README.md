@@ -168,7 +168,7 @@ kubectl apply -f <storageclass_yaml>
 
 ### PVC annotations
 
-The controller reads **PersistentVolumeClaim** annotations with the `flexa.io/` prefix at volume creation. If a PVC does not set an annotation, the StorageClass parameter with the same name is used; if neither is set, the FlexA proxy default applies. Examples: [`deploy/kubernetes/pvc_zfs.yaml`](deploy/kubernetes/pvc_zfs.yaml), [`deploy/kubernetes/pvc_lustre.yaml`](deploy/kubernetes/pvc_lustre.yaml).
+The controller reads **PersistentVolumeClaim** annotations with the `flexa.io/` prefix at volume creation. If a PVC does not set an annotation, the StorageClass parameter with the same name is used; if neither is set, the driver sends the proxy default listed below (the legacy proxy rejects an empty ZFS option, so the driver fills it in). Examples: [`deploy/kubernetes/pvc_zfs.yaml`](deploy/kubernetes/pvc_zfs.yaml), [`deploy/kubernetes/pvc_lustre.yaml`](deploy/kubernetes/pvc_lustre.yaml).
 
 | Annotation | Purpose (summary) |
 | ---------- | ----------------- |
@@ -178,9 +178,9 @@ The controller reads **PersistentVolumeClaim** annotations with the `flexa.io/` 
 | `flexa.io/optionDedup` | Deduplication (ZFS). Proxy default `off`. |
 | `flexa.io/secureAddress` | Secure network address for export. |
 | `flexa.io/secureSubnet` | Secure network mask. |
-| `flexa.io/nfsAccess` | NFS access mode (e.g. RW). |
-| `flexa.io/nfsNoRootSquashing` | NFS root squashing. |
-| `flexa.io/nfsInsecure` | NFS insecure port. |
+| `flexa.io/nfsAccess` | NFS access mode (`RW`, `RO`). Proxy default `RW`. |
+| `flexa.io/nfsNoRootSquashing` | `on` disables root squashing. Proxy default `off`. |
+| `flexa.io/nfsInsecure` | `on` allows client ports above 1024. Proxy default `off`. |
 | `flexa.io/pvcQos` | Lustre PVC QoS (FlexA 1.5 or later). |
 
 Use values such as `"on"` / `"off"` or addresses as in the samples; follow Gluesys FlexA documentation for your environment.

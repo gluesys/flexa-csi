@@ -72,23 +72,50 @@ type ControllerServer struct {
 	csi.UnimplementedControllerServer
 	Driver     *Driver
 	FlxService interfaces.FlexAService
+	locks      *volumeLocks
 }
 
-func getSizeByCapacityRange(capRange *csi.CapacityRange) (int64, error) {
-	if capRange == nil {
-		return 1 * utils.UNIT_GB, nil
-	}
+// defaultVolumeSize is used when the request names no size, and is the floor
+// for small requests as long as limit_bytes allows it.
+const defaultVolumeSize = 1 * utils.UNIT_GB
 
-	minSize := capRange.GetRequiredBytes()
-	maxSize := capRange.GetLimitBytes()
-	if 0 < maxSize && maxSize < minSize {
+// getSizeByCapacityRange picks the size to provision. The proxy takes whole MiB,
+// so required_bytes is rounded up; rounding down would hand out less than asked.
+func getSizeByCapacityRange(capRange *csi.CapacityRange) (int64, error) {
+	required := capRange.GetRequiredBytes()
+	limit := capRange.GetLimitBytes()
+	if required < 0 || limit < 0 {
+		return 0, status.Error(codes.InvalidArgument, "Invalid input: capacity range must not be negative")
+	}
+	if 0 < limit && limit < required {
 		return 0, status.Error(codes.InvalidArgument, "Invalid input: limitBytes is smaller than requiredBytes")
 	}
-	if minSize < utils.UNIT_GB {
-		return 0, status.Error(codes.InvalidArgument, "Invalid input: required bytes is smaller than 1G")
-	}
 
-	return int64(minSize), nil
+	size := utils.BytesToMBCeil(required) * utils.UNIT_MB
+	if size < defaultVolumeSize {
+		size = defaultVolumeSize
+	}
+	if 0 < limit && limit < size {
+		// The 1GiB floor or the MiB rounding overshot the limit: take the largest
+		// whole MiB that still fits.
+		size = (limit / utils.UNIT_MB) * utils.UNIT_MB
+		if size == 0 || size < required {
+			return 0, status.Errorf(codes.OutOfRange,
+				"no whole-MiB size between requiredBytes %d and limitBytes %d", required, limit)
+		}
+	}
+	return size, nil
+}
+
+// parseFs normalizes the StorageClass "fs" parameter ("" means zfs).
+func parseFs(v string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "zfs":
+		return "zfs", nil
+	case "lustre":
+		return "lustre", nil
+	}
+	return "", fmt.Errorf("unsupported fs %q: use zfs or lustre", v)
 }
 
 func (cs *ControllerServer) isVolumeAccessModeSupport(mode csi.VolumeCapability_AccessMode_Mode) bool {
@@ -101,24 +128,78 @@ func (cs *ControllerServer) isVolumeAccessModeSupport(mode csi.VolumeCapability_
 	return false
 }
 
-func (cs *ControllerServer) lookupPVAttributesByVolumeHandle(ctx context.Context, volumeID string) (map[string]string, bool) {
-	pvs, err := cs.Driver.K8sClient.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+// checkVolumeCapabilities reports why caps cannot be served: the volumes are
+// NFS or Lustre file systems, so only mount access with a known mode works.
+func (cs *ControllerServer) checkVolumeCapabilities(caps []*csi.VolumeCapability) error {
+	if len(caps) == 0 {
+		return fmt.Errorf("no volume capabilities are provided")
+	}
+	for _, c := range caps {
+		if c == nil {
+			return fmt.Errorf("volume capability is empty")
+		}
+		if c.GetBlock() != nil {
+			return fmt.Errorf("block access is not supported")
+		}
+		if c.GetMount() == nil {
+			return fmt.Errorf("volume capability has no access type")
+		}
+		if !cs.isVolumeAccessModeSupport(c.GetAccessMode().GetMode()) {
+			return fmt.Errorf("access mode %v is not supported", c.GetAccessMode().GetMode())
+		}
+	}
+	return nil
+}
+
+// volumeAttributes looks up the PV of volumeID. An API failure is UNAVAILABLE so
+// the sidecar retries instead of acting on a missing answer.
+func (cs *ControllerServer) volumeAttributes(ctx context.Context, volumeID string) (map[string]string, bool, error) {
+	attrs, found, err := lookupPVAttributes(ctx, cs.Driver.K8sClient, volumeID)
 	if err != nil {
-		return nil, false
+		return nil, false, status.Errorf(codes.Unavailable, "failed to look up PV for volume %s: %v", volumeID, err)
 	}
-	for _, pv := range pvs.Items {
-		if pv.Spec.CSI == nil {
-			continue
+	return attrs, found, nil
+}
+
+// serviceForAttrs builds the proxy client for an existing volume: explicit
+// attributes first, then its proxyProfile, then the legacy default.
+func (cs *ControllerServer) serviceForAttrs(attrs map[string]string) (*service.FlexAService, error) {
+	proxy, ok := proxyFromVolumeAttributes(attrs)
+	if !ok {
+		p, err := cs.Driver.SelectProxy(strings.TrimSpace(attrs[volAttrProxyProfile]))
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 		}
-		if pv.Spec.CSI.VolumeHandle != volumeID {
-			continue
-		}
-		return pv.Spec.CSI.VolumeAttributes, true
+		proxy = p
 	}
-	return nil, false
+	reqService := service.NewFlexAService()
+	reqService.SetFep(proxy)
+	return reqService, nil
+}
+
+// backendKey returns the pool (zfs) or cluster (lustre) an existing volume lives in.
+func backendKey(fs string, attrs map[string]string) (string, error) {
+	if fs == "lustre" {
+		if c := strings.TrimSpace(attrs["clusterName"]); c != "" {
+			return c, nil
+		}
+		return "", status.Error(codes.InvalidArgument, "Missing clusterName in PV attributes")
+	}
+	if p := strings.TrimSpace(attrs["poolName"]); p != "" {
+		return p, nil
+	}
+	return "", status.Error(codes.InvalidArgument, "Missing poolName in PV attributes")
 }
 
 func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
+	volName := req.GetName()
+	if volName == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "No name is provided")
+	}
+	if err := cs.checkVolumeCapabilities(req.GetVolumeCapabilities()); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+
 	// Snapshot restore and volume cloning are not supported. Without this guard the
 	// requested content source is silently dropped and the caller gets an empty volume.
 	if src := req.GetVolumeContentSource(); src != nil {
@@ -127,25 +208,43 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	sizeInByte, err := getSizeByCapacityRange(req.GetCapacityRange())
-	volName, volCap := req.GetName(), req.GetVolumeCapabilities()
-
 	if err != nil {
 		return nil, err
 	}
 
-	pvcName := req.Parameters["csi.storage.k8s.io/pvc/name"]
-	pvcNS := req.Parameters["csi.storage.k8s.io/pvc/namespace"]
+	params := req.GetParameters()
+	fs, err := parseFs(params["fs"])
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	poolName := strings.TrimSpace(params["poolName"])
+	clusterName := strings.TrimSpace(params["clusterName"])
+	proxyProfile := strings.TrimSpace(params[volAttrProxyProfile])
+	if fs == "zfs" && poolName == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "poolName is required for fs=zfs")
+	}
+	if fs == "lustre" && clusterName == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "clusterName is required for fs=lustre")
+	}
+
+	pvcName := params["csi.storage.k8s.io/pvc/name"]
+	pvcNS := params["csi.storage.k8s.io/pvc/namespace"]
 
 	log.Infof("PVC Name : %s PVC NameSpace : %s", pvcName, pvcNS)
 
-	pvc, err := cs.Driver.K8sClient.CoreV1().PersistentVolumeClaims(pvcNS).Get(ctx, pvcName, metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("Failed to get pvc %s/%s: %v", pvcNS, pvcName, err)
+	// Without --extra-create-metadata (or outside Kubernetes) there is no PVC to
+	// read annotations from; StorageClass parameters and proxy defaults apply.
+	var annotations map[string]string
+	if pvcName != "" && pvcNS != "" {
+		pvc, err := cs.Driver.K8sClient.CoreV1().PersistentVolumeClaims(pvcNS).Get(ctx, pvcName, metav1.GetOptions{})
+		if err != nil {
+			return nil, status.Errorf(codes.Unavailable, "Failed to get pvc %s/%s: %v", pvcNS, pvcName, err)
+		}
+		annotations = pvc.Annotations
 	}
 
 	// 볼륨 옵션: PVC 어노테이션이 있으면 그 값, 없으면 StorageClass 의 같은 이름 파라미터.
-	params := req.GetParameters()
-	opt := func(key string) string { return volumeOption(pvc.Annotations, params, key) }
+	opt := func(key string) string { return volumeOption(annotations, params, key) }
 
 	optionSVS := opt("flexa.io/optionSVS")
 	optionISS := opt("flexa.io/optionISS")
@@ -154,7 +253,11 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	log.Infof("Volume Options : optionSVS(%s), optionISS(%s), optionComp(%s), optionDedup(%s)", optionSVS, optionISS, optionComp, optionDedup)
 
-	secureName := fmt.Sprintf("zone_%s", pvcName)
+	zoneOwner := pvcName
+	if zoneOwner == "" {
+		zoneOwner = volName
+	}
+	secureName := fmt.Sprintf("zone_%s", zoneOwner)
 	secureAddr := opt("flexa.io/secureAddress")
 	secureSub := opt("flexa.io/secureSubnet")
 
@@ -168,44 +271,6 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	pvcQos := opt(volAttrPvcQos)
 	log.Infof("PVC QoS : %s", pvcQos)
-
-	if volName == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "No name is provided")
-	}
-
-	if volCap == nil {
-		return nil, status.Errorf(codes.InvalidArgument, "No volume capabilities are provided")
-	}
-
-	for _, cap := range volCap {
-		accessMode := cap.GetAccessMode().GetMode()
-
-		if !cs.isVolumeAccessModeSupport(accessMode) {
-			return nil, status.Errorf(codes.InvalidArgument, "Invalid volume capability access mode")
-		}
-	}
-
-	poolName := params["poolName"]
-	fs := params["fs"]
-	proxyProfile := strings.TrimSpace(params[volAttrProxyProfile])
-
-	if fs == "" {
-		fs = "zfs"
-	}
-
-	if fs == "zfs" {
-		if poolName == "" {
-			return nil, status.Errorf(codes.InvalidArgument, "poolName is required for fs=zfs")
-		}
-		cs.Driver.PoolName = poolName
-	}
-
-	clusterName := params["clusterName"]
-	if fs == "lustre" {
-		if clusterName == "" {
-			return nil, status.Errorf(codes.InvalidArgument, "clusterName is required for fs=lustre")
-		}
-	}
 
 	// CSI VolumeHandle and backend volume name: same as provisioner volume name (no k8s-csi- prefix).
 	backingName := volName
@@ -235,12 +300,6 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		PvcQos:      pvcQos,
 	}
 
-	lookupPool := poolName
-	lookupKey := volName
-	if fs == "lustre" {
-		lookupPool = clusterName
-	}
-
 	proxy, err := cs.Driver.SelectProxy(proxyProfile)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
@@ -249,24 +308,53 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
+
+	release, err := cs.locks.acquire(volumeID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	reqService := service.NewFlexAService()
 	reqService.SetFep(proxy)
 
-	k8sVolume := reqService.GetVolume(fs, lookupPool, lookupKey)
-	if k8sVolume == nil || (fs == "zfs" && strings.TrimSpace(k8sVolume.BaseDir) == "") {
-		k8sVolume, err = reqService.CreateVolume(spec)
-		if err != nil {
-			return nil, err
-		}
-	} else {
+	k8sVolume, err := reqService.GetVolume(fs, poolOrCluster, volName)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "Failed to look up volume %s: %v", volName, err)
+	}
+	if k8sVolume != nil {
 		// Size 0 means the backend could not report a size (e.g. Lustre quota not
-		// yet visible in Redis); do not treat that as a capacity conflict.
-		if k8sVolume.Size > 0 && k8sVolume.Size < sizeInByte {
+		// yet visible in Redis); do not treat that as a capacity conflict. Volumes
+		// made before sizes were rounded up may be short by less than 1MiB.
+		required := req.GetCapacityRange().GetRequiredBytes()
+		if k8sVolume.Size > 0 && k8sVolume.Size < utils.BytesToMB(required)*utils.UNIT_MB {
 			return nil, status.Errorf(codes.AlreadyExists,
 				"Volume [%s] already exists but is smaller than requested capacity", volName)
 		}
-		// already existed
+		if limit := req.GetCapacityRange().GetLimitBytes(); limit > 0 && k8sVolume.Size > limit {
+			return nil, status.Errorf(codes.AlreadyExists,
+				"Volume [%s] already exists but is larger than limitBytes", volName)
+		}
+	}
+	switch {
+	case k8sVolume == nil:
+		if k8sVolume, err = reqService.CreateVolume(spec); err != nil {
+			return nil, status.Errorf(codes.Internal, "Failed to create volume %s: %v", volName, err)
+		}
+	case fs == "zfs" && strings.TrimSpace(k8sVolume.BaseDir) == "":
+		// The legacy proxy reports no share path, and an earlier attempt may have
+		// stopped between dataset and share: make sure the share is there.
+		log.Infof("Volume [%s] exists without a known share path; ensuring the share", volName)
+		if k8sVolume, err = reqService.CreateZfsShare(spec); err != nil {
+			return nil, status.Errorf(codes.Internal, "Failed to create share for volume %s: %v", volName, err)
+		}
+	default:
 		log.Debugf("Volume [%s] already exists , backing name: [%s]", volName, k8sVolume.VolumeName)
+	}
+
+	capacity := k8sVolume.Size
+	if capacity <= 0 {
+		capacity = sizeInByte
 	}
 
 	volCtx := map[string]string{
@@ -291,7 +379,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
 			VolumeId:      k8sVolume.VolumeId,
-			CapacityBytes: k8sVolume.Size,
+			CapacityBytes: capacity,
 			VolumeContext: volCtx,
 		},
 	}, nil
@@ -303,55 +391,44 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return nil, status.Errorf(codes.InvalidArgument, "No volume id is provided")
 	}
 
-	attrs, ok := cs.lookupPVAttributesByVolumeHandle(ctx, volumeId)
-	if !ok {
+	attrs, found, err := cs.volumeAttributes(ctx, volumeId)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		// No PV carries this handle: nothing tells us where the volume lives.
 		return &csi.DeleteVolumeResponse{}, nil
 	}
 
-	fs := volumeFsFromAttrs(attrs)
-	poolName := cs.Driver.PoolName
-	if attrs != nil {
-		if p := strings.TrimSpace(attrs["poolName"]); p != "" {
-			poolName = p
-		}
+	release, err := cs.locks.acquire(volumeId)
+	if err != nil {
+		return nil, err
 	}
+	defer release()
 
-	proxy, ok := proxyFromVolumeAttributes(attrs)
-	if !ok {
-		proxyProfile := ""
-		if attrs != nil {
-			proxyProfile = strings.TrimSpace(attrs[volAttrProxyProfile])
-		}
-		p, err := cs.Driver.SelectProxy(proxyProfile)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
-		}
-		proxy = p
+	fs := volumeFsFromAttrs(attrs)
+	container, err := backendKey(fs, attrs)
+	if err != nil {
+		return nil, err
 	}
-	reqService := service.NewFlexAService()
-	reqService.SetFep(proxy)
+	reqService, err := cs.serviceForAttrs(attrs)
+	if err != nil {
+		return nil, err
+	}
 
 	if fs == "lustre" {
-		clusterName := strings.TrimSpace(attrs["clusterName"])
-		if clusterName == "" {
-			return nil, status.Errorf(codes.InvalidArgument, "Missing clusterName in PV attributes for lustre delete")
-		}
-		if err := reqService.DeleteVolume("lustre", clusterName, volumeId, volumeId); err != nil {
-			return nil, status.Errorf(codes.Internal,
-				fmt.Sprintf("Failed to DeleteVolume(%s), err: %v", volumeId, err))
+		if err := reqService.DeleteVolume("lustre", container, volumeId, volumeId); err != nil {
+			return nil, status.Errorf(codes.Internal, "Failed to DeleteVolume(%s), err: %v", volumeId, err)
 		}
 		return &csi.DeleteVolumeResponse{}, nil
 	}
 
 	shareName := webapi.LegacyZfsNfsShareName
-	if attrs != nil {
-		if s := strings.TrimSpace(attrs["shareName"]); s != "" {
-			shareName = s
-		}
+	if s := strings.TrimSpace(attrs["shareName"]); s != "" {
+		shareName = s
 	}
-	if err := reqService.DeleteVolume("zfs", poolName, shareName, volumeId); err != nil {
-		return nil, status.Errorf(codes.Internal,
-			fmt.Sprintf("Failed to DeleteVolume(%s), err: %v", volumeId, err))
+	if err := reqService.DeleteVolume("zfs", container, shareName, volumeId); err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to DeleteVolume(%s), err: %v", volumeId, err)
 	}
 
 	return &csi.DeleteVolumeResponse{}, nil
@@ -370,55 +447,47 @@ func (cs *ControllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 	if volumeId == "" {
 		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
 	}
-
-	if volCap == nil {
+	if len(volCap) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "No volume capabilities are provided")
 	}
 
-	attrs, ok := cs.lookupPVAttributesByVolumeHandle(ctx, volumeId)
-	if !ok {
+	attrs, found, err := cs.volumeAttributes(ctx, volumeId)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
 		return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
 	}
 
 	fs := volumeFsFromAttrs(attrs)
-	poolName := cs.Driver.PoolName
-	if attrs != nil {
-		if p := strings.TrimSpace(attrs["poolName"]); p != "" {
-			poolName = p
-		}
+	container, err := backendKey(fs, attrs)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist: %v", volumeId, err)
 	}
-
-	proxy, ok := proxyFromVolumeAttributes(attrs)
-	if !ok {
-		proxyProfile := ""
-		if attrs != nil {
-			proxyProfile = strings.TrimSpace(attrs[volAttrProxyProfile])
-		}
-		p, err := cs.Driver.SelectProxy(proxyProfile)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
-		}
-		proxy = p
+	reqService, err := cs.serviceForAttrs(attrs)
+	if err != nil {
+		return nil, err
 	}
-	reqService := service.NewFlexAService()
-	reqService.SetFep(proxy)
-
-	if fs == "lustre" {
-		clusterName := strings.TrimSpace(attrs["clusterName"])
-		if clusterName == "" {
-			return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
-		}
-		if reqService.GetVolume("lustre", clusterName, volumeId) == nil {
-			return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
-		}
-		return &csi.ValidateVolumeCapabilitiesResponse{}, nil
+	vol, err := reqService.GetVolume(fs, container, volumeId)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "Failed to look up volume %s: %v", volumeId, err)
 	}
-
-	if reqService.GetVolume("zfs", poolName, volumeId) == nil {
+	if vol == nil {
 		return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
 	}
 
-	return &csi.ValidateVolumeCapabilitiesResponse{}, nil
+	// An empty Confirmed means "not supported"; Message says why.
+	if err := cs.checkVolumeCapabilities(volCap); err != nil {
+		return &csi.ValidateVolumeCapabilitiesResponse{Message: err.Error()}, nil
+	}
+	return &csi.ValidateVolumeCapabilitiesResponse{
+		Confirmed: &csi.ValidateVolumeCapabilitiesResponse_Confirmed{
+			VolumeContext:      req.GetVolumeContext(),
+			VolumeCapabilities: volCap,
+			Parameters:         req.GetParameters(),
+			MutableParameters:  req.GetMutableParameters(),
+		},
+	}, nil
 }
 
 // capacityProfile is one client-info entry ListVolumes/GetCapacity iterate over.
@@ -723,6 +792,9 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 	if volumeId == "" {
 		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
 	}
+	if req.GetCapacityRange() == nil {
+		return nil, status.Error(codes.InvalidArgument, "Capacity range missing in request")
+	}
 
 	// Target size
 	newSizeBytes, err := getSizeByCapacityRange(req.GetCapacityRange())
@@ -730,53 +802,38 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 		return nil, err
 	}
 
-	// Lookup PV attributes to determine fs/pool/cluster and proxy hints.
-	attrs, ok := cs.lookupPVAttributesByVolumeHandle(ctx, volumeId)
-	if !ok || attrs == nil {
+	attrs, found, err := cs.volumeAttributes(ctx, volumeId)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
 		return nil, status.Errorf(codes.NotFound, "PV attributes not found for volumeHandle=%s", volumeId)
 	}
 
+	release, err := cs.locks.acquire(volumeId)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	fs := volumeFsFromAttrs(attrs)
-
-	// Resolve proxy: explicit attrs -> proxyProfile -> legacy default.
-	proxy, ok := proxyFromVolumeAttributes(attrs)
-	if !ok {
-		proxyProfile := strings.TrimSpace(attrs[volAttrProxyProfile])
-		p, err := cs.Driver.SelectProxy(proxyProfile)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
-		}
-		proxy = p
+	poolOrCluster, err := backendKey(fs, attrs)
+	if err != nil {
+		return nil, err
+	}
+	reqService, err := cs.serviceForAttrs(attrs)
+	if err != nil {
+		return nil, err
 	}
 
-	reqService := service.NewFlexAService()
-	reqService.SetFep(proxy)
-
-	// Determine backend name and current size (for shrink guard).
-	var poolOrCluster string
-	var backendVolName string
-	var currentSizeBytes int64
-
-	if fs == "lustre" {
-		poolOrCluster = strings.TrimSpace(attrs["clusterName"])
-		if poolOrCluster == "" {
-			return nil, status.Error(codes.InvalidArgument, "Missing clusterName in PV attributes")
-		}
-		backendVolName = volumeId
-
-		if info := reqService.GetVolume(fs, poolOrCluster, backendVolName); info != nil {
-			currentSizeBytes = info.Size
-		}
-	} else {
-		poolOrCluster = strings.TrimSpace(attrs["poolName"])
-		if poolOrCluster == "" {
-			return nil, status.Error(codes.InvalidArgument, "Missing poolName in PV attributes")
-		}
-		backendVolName = volumeId
-		if info := reqService.GetVolume(fs, poolOrCluster, backendVolName); info != nil {
-			currentSizeBytes = info.Size
-		}
+	info, err := reqService.GetVolume(fs, poolOrCluster, volumeId)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "Failed to look up volume %s: %v", volumeId, err)
 	}
+	if info == nil {
+		return nil, status.Errorf(codes.NotFound, "Volume[%s] does not exist", volumeId)
+	}
+	currentSizeBytes := info.Size
 
 	// Idempotency: if already at/above requested size, do not call proxy expand again.
 	if currentSizeBytes > 0 && newSizeBytes <= currentSizeBytes {
@@ -786,17 +843,17 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 		}, nil
 	}
 
-	if err := reqService.ExpandVolume(fs, poolOrCluster, backendVolName, newSizeBytes); err != nil {
+	if err := reqService.ExpandVolume(fs, poolOrCluster, volumeId, newSizeBytes); err != nil {
 		return nil, status.Errorf(codes.Internal, "ExpandVolume failed: %v", err)
 	}
 
 	// Fetch updated size when possible, otherwise return requested size.
 	capBytes := newSizeBytes
-	if info := reqService.GetVolume(fs, poolOrCluster, backendVolName); info != nil && info.Size > 0 {
+	if info, err := reqService.GetVolume(fs, poolOrCluster, volumeId); err == nil && info != nil && info.Size > 0 {
 		capBytes = info.Size
 	}
-	if currentSizeBytes > 0 && capBytes < currentSizeBytes {
-		capBytes = currentSizeBytes
+	if capBytes < newSizeBytes {
+		capBytes = newSizeBytes
 	}
 
 	return &csi.ControllerExpandVolumeResponse{

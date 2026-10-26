@@ -54,8 +54,7 @@ type Driver struct {
 	vCap       []*csi.VolumeCapability_AccessMode
 	nsCap      []*csi.NodeServiceCapability
 	FlxService interfaces.FlexAService
-	K8sClient  *kubernetes.Clientset
-	PoolName   string
+	K8sClient  kubernetes.Interface
 
 	clientInfo atomic.Value // *common.ClientInfoConfig
 }

@@ -38,7 +38,6 @@ func (fep *FEP) sendRequest(data string, apiTemplate interface{}, params url.Val
 }
 
 func (fep *FEP) sendRequestWithoutConnectionCheck(data string, apiTemplate interface{}, params url.Values, cgiPath string) (Response, error) {
-	client := &http.Client{}
 	var req *http.Request
 
 	// Ex: http://10.12.12.14:9001/
@@ -74,7 +73,7 @@ func (fep *FEP) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return Response{}, err
 	}
@@ -90,7 +89,7 @@ func (fep *FEP) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 	log.Debugln(s)
 
 	if resp.StatusCode != 200 && resp.StatusCode != 302 {
-		return Response{}, fmt.Errorf("Bad response status code: %d", resp.StatusCode)
+		return Response{}, newAPIError(resp.StatusCode, bodyText, cgiPath)
 	}
 
 	// Strip data json data from response
@@ -111,7 +110,6 @@ func (fep *FEP) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 			return Response{}, err
 		}
 	}
-	fmt.Println(string(e.Data))
 	outResp.Data = apiTemplate
 	outResp.StatusCode = resp.StatusCode
 	outResp.Success = true

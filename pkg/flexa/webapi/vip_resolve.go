@@ -54,7 +54,7 @@ func (fep *FEP) postVipResolve(cgiPath, refIP string) (string, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := (&http.Client{}).Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}

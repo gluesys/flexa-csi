@@ -59,7 +59,7 @@ func (fep *FEP) LustreCreateVolume(
 	}
 
 	body := map[string]string{
-		"sizeValue":             fmt.Sprintf("%d", utils.BytesToMB(size)),
+		"sizeValue":             fmt.Sprintf("%d", utils.BytesToMBCeil(size)),
 		"sizeUnit":              "MB",
 		"zoneName":              zoneName,
 		"address":               address,
@@ -82,6 +82,10 @@ func (fep *FEP) LustreDeleteVolume(clusterName string, volName string) error {
 	}
 	cgiPath := fmt.Sprintf("lustre/cluster/%s/volume/%s/delete", clusterName, volName)
 	_, err := fep.lustrePost(cgiPath, map[string]string{})
+	if IsMissing(err, "Share("+volName+")") {
+		log.Infof("Gluesys FlexA Call(LustreDeleteVolume) : %s already gone: %v", volName, err)
+		return nil
+	}
 	return err
 }
 
@@ -191,7 +195,7 @@ func (fep *FEP) LustreExpandVolume(clusterName string, volName string, newSizeBy
 		return fmt.Errorf("newSizeBytes must be positive")
 	}
 	body := map[string]string{
-		"sizeValue": fmt.Sprintf("%d", utils.BytesToMB(newSizeBytes)),
+		"sizeValue": fmt.Sprintf("%d", utils.BytesToMBCeil(newSizeBytes)),
 		"sizeUnit":  "MB",
 	}
 	cgiPath := fmt.Sprintf("lustre/cluster/%s/volume/%s/expand", clusterName, volName)
@@ -214,7 +218,7 @@ func (fep *FEP) lustrePost(cgiPath string, body map[string]string) (LustreVolume
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := (&http.Client{}).Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return LustreVolumeCreateResponse{}, err
 	}
@@ -227,7 +231,7 @@ func (fep *FEP) lustrePost(cgiPath string, body map[string]string) (LustreVolume
 	log.Debugln(string(raw))
 
 	if resp.StatusCode != 200 && resp.StatusCode != 302 {
-		return LustreVolumeCreateResponse{}, fmt.Errorf("Bad response status code: %d", resp.StatusCode)
+		return LustreVolumeCreateResponse{}, newAPIError(resp.StatusCode, raw, cgiPath)
 	}
 
 	type envelope struct {

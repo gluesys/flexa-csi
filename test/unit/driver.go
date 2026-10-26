@@ -23,7 +23,6 @@ func GetTestDriver() *driver.Driver {
 	flxService.SetFep(&proxy)
 
 	drv, err := driver.NewControllerAndNodeDriver(csiNode, csiEndpoint, flxService)
-	drv.PoolName = "AAAA"
 	if err != nil {
 		log.Errorf("Failed to create driver %v", err)
 		return nil

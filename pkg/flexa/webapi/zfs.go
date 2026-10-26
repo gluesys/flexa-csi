@@ -166,7 +166,7 @@ func (fep *FEP) InfoZfsVol(poolName string, volName string) (ZfsVolInfo, error) 
 // 볼륨 생성 + 공유 생성
 func (fep *FEP) ZfsCreateVolume(size int64, volId string, volName string, poolName string, optionSVS string, optionISS string, optionComp string, optionDedup string) error {
 	params := url.Values{}
-	params.Set("sizeValue", fmt.Sprintf("%d", utils.BytesToMB(size)))
+	params.Set("sizeValue", fmt.Sprintf("%d", utils.BytesToMBCeil(size)))
 	params.Set("sizeUnit", "MB")
 	params.Set("optionSVS", optionSVS)
 	params.Set("optionISS", optionISS)
@@ -234,26 +234,38 @@ func (fep *FEP) ZfsCreateShareNfs(volId string, volName string, poolName string,
 	return sharePath, nil
 }
 
+// ZfsDeleteVolume removes the NFS share and then the dataset. A part that is
+// already gone counts as deleted, so a retry after a partial failure finishes
+// the job instead of failing on the first step forever.
 func (fep *FEP) ZfsDeleteVolume(volName string, shareName string, poolName string) error {
-	// 공유 삭제
-	params := url.Values{}
-
-	cgiPath := fmt.Sprintf("share/pool/%s/volume/%s/%s/delete", poolName, volName, shareName)
-
-	type respDeleteSpec struct {
-	}
-
-	var respDelete respDeleteSpec
-
-	_, err := fep.sendRequest("post", &respDelete, params, cgiPath)
-	if err != nil {
+	if err := fep.ZfsDeleteShare(volName, shareName, poolName); err != nil {
 		return err
 	}
+	return fep.ZfsDestroyVolume(volName, poolName)
+}
 
-	// 볼륨 삭제
-	cgiPath = fmt.Sprintf("zfs/pool/%s/volume/%s/delete", poolName, volName)
+func (fep *FEP) ZfsDeleteShare(volName string, shareName string, poolName string) error {
+	cgiPath := fmt.Sprintf("share/pool/%s/volume/%s/%s/delete", poolName, volName, shareName)
 
-	resp, err := fep.sendRequest("post", &respDelete, params, cgiPath)
+	var out map[string]interface{}
+	_, err := fep.sendRequest("post", &out, url.Values{}, cgiPath)
+	// Without the volume there is no share either; the volume step checks again.
+	if IsMissing(err, shareName, "Share("+shareName+")", "Volume("+volName+")") {
+		log.Infof("Gluesys FlexA Call(ZfsDeleteShare) : %s already gone: %v", shareName, err)
+		return nil
+	}
+	return err
+}
+
+func (fep *FEP) ZfsDestroyVolume(volName string, poolName string) error {
+	cgiPath := fmt.Sprintf("zfs/pool/%s/volume/%s/delete", poolName, volName)
+
+	var out map[string]interface{}
+	resp, err := fep.sendRequest("post", &out, url.Values{}, cgiPath)
+	if IsMissing(err, "Volume("+volName+")") {
+		log.Infof("Gluesys FlexA Call(ZfsDestroyVolume) : %s already gone: %v", volName, err)
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -261,6 +273,23 @@ func (fep *FEP) ZfsDeleteVolume(volName string, shareName string, poolName strin
 	log.Infof("Gluesys FlexA Call(ZfsDeleteVolume) Response : %v", resp)
 
 	return nil
+}
+
+// ZfsSharePath returns the export path of an existing share. The legacy proxy's
+// volume info carries no share path, so a retried create needs this lookup.
+func (fep *FEP) ZfsSharePath(poolName string, volName string, shareName string) (string, error) {
+	cgiPath := fmt.Sprintf("share/pool/%s/volume/%s/%s", poolName, volName, shareName)
+
+	var out struct {
+		Path string `json:"path"`
+	}
+	if _, err := fep.sendRequest("", &out, url.Values{}, cgiPath); err != nil {
+		return "", err
+	}
+	if out.Path == "" {
+		return "", fmt.Errorf("share %s has no path", shareName)
+	}
+	return out.Path, nil
 }
 
 func (fep *FEP) ZfsExpandVolume(poolName string, volName string, newSizeBytes int64) error {
@@ -272,7 +301,7 @@ func (fep *FEP) ZfsExpandVolume(poolName string, volName string, newSizeBytes in
 	}
 
 	params := url.Values{}
-	params.Set("sizeValue", fmt.Sprintf("%d", utils.BytesToMB(newSizeBytes)))
+	params.Set("sizeValue", fmt.Sprintf("%d", utils.BytesToMBCeil(newSizeBytes)))
 	params.Set("sizeUnit", "MB")
 
 	cgiPath := fmt.Sprintf("zfs/pool/%s/volume/%s/expand", poolName, volName)
