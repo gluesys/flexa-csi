@@ -16,27 +16,46 @@ logLevel: info
 sidecars:
   provisioner:
     repository: registry.k8s.io/sig-storage/csi-provisioner
-    tag: v3.0.0
-    pullPolicy: Always
+    tag: v5.0.2
+    pullPolicy: IfNotPresent
   resizer:
     repository: registry.k8s.io/sig-storage/csi-resizer
-    tag: v1.3.0
-    pullPolicy: Always
+    tag: v1.11.2
+    pullPolicy: IfNotPresent
   registrar:
     repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
-    tag: v2.3.0
-    pullPolicy: Always
+    tag: v2.11.1
+    pullPolicy: IfNotPresent
+  livenessProbe:
+    repository: registry.k8s.io/sig-storage/livenessprobe
+    tag: v2.13.1
+    pullPolicy: IfNotPresent
+
+# kubelet restarts csi-plugin when its gRPC Probe stops answering.
+livenessProbe:
+  failureThreshold: 5
+  initialDelaySeconds: 10
+  timeoutSeconds: 3
+  periodSeconds: 10
 
 controller:
   replicas: 1
   # 드라이버(csi-plugin)의 쿠버네티스 클라이언트 속도 제한. CreateVolume 마다 PVC 를 한 번 조회한다.
   kubeApiQps: 50
   kubeApiBurst: 100
+  # 프록시 호출 한 번의 상한. 기존 REST 프록시는 부하가 걸리면 몇 분씩 걸린다.
+  # 호출이 끝날 때까지 그 볼륨은 잠겨 있고, 재시도는 ABORTED 로 돌아간다.
+  proxyTimeout: 5m
+  # controller 와 node 가 같은 노드에서 hostNetwork 로 뜨므로 포트를 나눈다.
+  healthPort: 9808
   # external-provisioner 의 동시 처리 수와 쿠버네티스 클라이언트 속도 제한
   provisioner:
+    timeout: 60s
     workerThreads: 100
     kubeApiQps: 50
     kubeApiBurst: 100
+  resizer:
+    timeout: 60s
   hostNetwork: true
   labels: {}
   podAnnotations: {}
@@ -54,6 +73,7 @@ node:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  healthPort: 9809
   kubeletPath: /var/lib/kubelet
   pluginDir: /var/lib/kubelet/plugins/csi.flexa.com/
   registrationDir: /var/lib/kubelet/plugins_registry

@@ -42,17 +42,17 @@ spec:
       {{- end }}
       containers:
         - name: csi-provisioner
+          # Only to reach the plugin's socket on SELinux-enforcing nodes, where an
+          # unprivileged container cannot connect to a socket a privileged one made.
           securityContext:
             privileged: true
-            capabilities:
-              add: ["SYS_ADMIN"]
-            allowPrivilegeEscalation: true
           image: "{{ .Values.sidecars.provisioner.repository }}:{{ .Values.sidecars.provisioner.tag }}"
           args:
-            - --timeout=60s
+            - --timeout={{ .Values.controller.provisioner.timeout }}
             - --csi-address=$(ADDRESS)
             - --v=5
             - --extra-create-metadata
+            - --leader-election
             - --worker-threads={{ .Values.controller.provisioner.workerThreads }}
             - --kube-api-qps={{ .Values.controller.provisioner.kubeApiQps }}
             - --kube-api-burst={{ .Values.controller.provisioner.kubeApiBurst }}
@@ -64,15 +64,16 @@ spec:
             - name: socket-dir
               mountPath: /var/lib/csi/sockets/pluginproxy/
         - name: csi-resizer
+          # Only to reach the plugin's socket on SELinux-enforcing nodes, where an
+          # unprivileged container cannot connect to a socket a privileged one made.
           securityContext:
             privileged: true
-            capabilities:
-              add: ["SYS_ADMIN"]
-            allowPrivilegeEscalation: true
           image: "{{ .Values.sidecars.resizer.repository }}:{{ .Values.sidecars.resizer.tag }}"
           args:
             - --v=5
             - --csi-address=$(ADDRESS)
+            - --timeout={{ .Values.controller.resizer.timeout }}
+            - --leader-election
           env:
             - name: ADDRESS
               value: /var/lib/csi/sockets/pluginproxy/csi.sock
@@ -95,10 +96,20 @@ spec:
             - --log-level={{ .Values.logLevel }}
             - --kube-api-qps={{ .Values.controller.kubeApiQps }}
             - --kube-api-burst={{ .Values.controller.kubeApiBurst }}
+            - --proxy-timeout={{ .Values.controller.proxyTimeout }}
           env:
             - name: CSI_ENDPOINT
               value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: healthz
+              containerPort: {{ .Values.controller.healthPort }}
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+            httpGet:
+              path: /healthz
+              port: healthz
           volumeMounts:
             - name: socket-dir
               mountPath: /var/lib/csi/sockets/pluginproxy/
@@ -109,6 +120,19 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+        - name: liveness-probe
+          # Only to reach the plugin's socket on SELinux-enforcing nodes, where an
+          # unprivileged container cannot connect to a socket a privileged one made.
+          securityContext:
+            privileged: true
+          image: "{{ .Values.sidecars.livenessProbe.repository }}:{{ .Values.sidecars.livenessProbe.tag }}"
+          imagePullPolicy: {{ .Values.sidecars.livenessProbe.pullPolicy }}
+          args:
+            - --csi-address=/var/lib/csi/sockets/pluginproxy/csi.sock
+            - --http-endpoint=:{{ .Values.controller.healthPort }}
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
       volumes:
         - name: socket-dir
           emptyDir: {}
