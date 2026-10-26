@@ -95,6 +95,28 @@ func (fep *FEP) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 		}
 	}
 
+	return fep.do(req, apiTemplate, cgiPath)
+}
+
+// postJSON sends body as JSON. sendRequest only carries flat string fields; this
+// one is for bodies with nested objects or booleans (snapshot restore source,
+// missingOk).
+func (fep *FEP) postJSON(body interface{}, apiTemplate interface{}, cgiPath string) (Response, error) {
+	cgiUrl := fep.apiURL(cgiPath)
+	log.Infof("Gluesys FlexA Webapi Call Path : %s", cgiUrl)
+	param, err := json.Marshal(body)
+	if err != nil {
+		return Response{}, err
+	}
+	req, err := fep.newRequest("POST", cgiUrl, bytes.NewBuffer(param))
+	if err != nil {
+		return Response{}, err
+	}
+	return fep.do(req, apiTemplate, cgiPath)
+}
+
+// do sends req and decodes the {data,msg} envelope into apiTemplate.
+func (fep *FEP) do(req *http.Request, apiTemplate interface{}, cgiPath string) (Response, error) {
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return Response{}, err

@@ -196,7 +196,9 @@ func (fep *FEP) ZfsCreateVolume(size int64, volId string, volName string, poolNa
 	return nil
 }
 
-func (fep *FEP) ZfsCreateShareNfs(volId string, volName string, poolName string, zoneName string, address string, subnet string, access string, optionNoRootSquashing string, optionInsecure string) (string, error) {
+// shareDir is the directory inside the volume that is exported; "" means the
+// share name. A restored volume exports the directory copied from its source.
+func (fep *FEP) ZfsCreateShareNfs(volId string, volName string, poolName string, shareDir string, zoneName string, address string, subnet string, access string, optionNoRootSquashing string, optionInsecure string) (string, error) {
 	params := url.Values{}
 	params.Set("zoneName", zoneName)
 	params.Set("address", address)
@@ -207,7 +209,10 @@ func (fep *FEP) ZfsCreateShareNfs(volId string, volName string, poolName string,
 
 	// Share names are global in FlexA, so each CSI volume needs its own name.
 	shareName := ZfsNfsShareName(volId)
-	sharePath := fmt.Sprintf("/%s/%s/%s", poolName, volName, shareName)
+	if shareDir == "" {
+		shareDir = shareName
+	}
+	sharePath := fmt.Sprintf("/%s/%s/%s", poolName, volName, shareDir)
 	params.Set("path", sharePath)
 
 	cgiPath := fmt.Sprintf("share/pool/%s/volume/%s/%s/create", poolName, volName, shareName)
@@ -238,6 +243,17 @@ func (fep *FEP) ZfsCreateShareNfs(volId string, volName string, poolName string,
 // already gone counts as deleted, so a retry after a partial failure finishes
 // the job instead of failing on the first step forever.
 func (fep *FEP) ZfsDeleteVolume(volName string, shareName string, poolName string) error {
+	// Destroying the dataset destroys its snapshots too, so a volume with
+	// VolumeSnapshots stays (share included) until they are deleted.
+	// provisiond refuses the dataset delete as well; checking first keeps the
+	// share. A failed check is not fatal for that reason.
+	snaps, err := fep.ZfsCsiSnapshots(poolName, volName)
+	if err != nil {
+		log.Warnf("Gluesys FlexA Call(ZfsDeleteVolume) : snapshot check of %s failed: %v", volName, err)
+	}
+	if len(snaps) > 0 {
+		return &HasSnapshotsError{Volume: volName, Snapshots: snaps}
+	}
 	if err := fep.ZfsDeleteShare(volName, shareName, poolName); err != nil {
 		return err
 	}

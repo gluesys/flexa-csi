@@ -91,6 +91,26 @@ spec:
           volumeMounts:
             - name: socket-dir
               mountPath: /var/lib/csi/sockets/pluginproxy/
+        {{- if .Values.snapshot.enabled }}
+        - name: csi-snapshotter
+          # Only to reach the plugin's socket on SELinux-enforcing nodes, where an
+          # unprivileged container cannot connect to a socket a privileged one made.
+          securityContext:
+            privileged: true
+          image: "{{ .Values.sidecars.snapshotter.repository }}:{{ .Values.sidecars.snapshotter.tag }}"
+          args:
+            - --v=5
+            - --csi-address=$(ADDRESS)
+            - --timeout={{ .Values.snapshot.timeout }}
+            - --leader-election
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          imagePullPolicy: {{ .Values.sidecars.snapshotter.pullPolicy }}
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+        {{- end }}
         - name: csi-plugin
           securityContext:
             privileged: true

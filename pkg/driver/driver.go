@@ -102,6 +102,7 @@ func NewControllerAndNodeDriver(nodeID string, endpoint string, flxService inter
 		csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
 		csi.ControllerServiceCapability_RPC_GET_CAPACITY,
 		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
+		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
 	})
 
 	d.addVolumeCapabilityAccessModes([]csi.VolumeCapability_AccessMode_Mode{

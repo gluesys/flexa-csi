@@ -196,13 +196,6 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 
-	// Snapshot restore and volume cloning are not supported. Without this guard the
-	// requested content source is silently dropped and the caller gets an empty volume.
-	if src := req.GetVolumeContentSource(); src != nil {
-		return nil, status.Errorf(codes.InvalidArgument,
-			"volume content source is not supported by this driver: %T", src.GetType())
-	}
-
 	sizeInByte, err := getSizeByCapacityRange(req.GetCapacityRange())
 	if err != nil {
 		return nil, err
@@ -221,6 +214,12 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 	if fs == "lustre" && clusterName == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "clusterName is required for fs=lustre")
+	}
+	// Only snapshot restore (ZFS) is supported. Rejecting other sources keeps them
+	// from being silently dropped, which would hand back an empty volume.
+	srcVolume, srcSnap, err := restoreSource(req.GetVolumeContentSource(), fs, poolName, proxyProfile)
+	if err != nil {
+		return nil, err
 	}
 
 	pvcName := params["csi.storage.k8s.io/pvc/name"]
@@ -294,6 +293,15 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		NfsNoRoot:   nfsNoRoot,
 		NfsInsecure: nfsInsecure,
 		PvcQos:      pvcQos,
+
+		SourceVolumeId:   srcVolume,
+		SourceSnapshotId: srcSnap,
+	}
+	if srcSnap != "" {
+		// The copy holds the source's exported directory; export that one.
+		if spec.ShareDir, err = cs.sourceShareDir(ctx, srcVolume); err != nil {
+			return nil, err
+		}
 	}
 
 	proxy, err := cs.Driver.SelectProxy(proxyProfile)
@@ -334,6 +342,12 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	switch {
 	case k8sVolume == nil:
 		if k8sVolume, err = reqService.CreateVolume(spec); err != nil {
+			if srcSnap != "" && webapi.IsTooSmall(err) {
+				return nil, status.Errorf(codes.OutOfRange, "volume %s: %v", volName, err)
+			}
+			if srcSnap != "" && webapi.IsMissing(err, "Snapshot("+srcVolume+"@"+srcSnap+")", "Source volume("+srcVolume+")") {
+				return nil, status.Errorf(codes.NotFound, "snapshot %s@%s does not exist: %v", srcVolume, srcSnap, err)
+			}
 			return nil, status.Errorf(codes.Internal, "Failed to create volume %s: %v", volName, err)
 		}
 	case fs == "zfs" && strings.TrimSpace(k8sVolume.BaseDir) == "":
@@ -381,6 +395,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			VolumeId:      k8sVolume.VolumeId,
 			CapacityBytes: capacity,
 			VolumeContext: volCtx,
+			ContentSource: req.GetVolumeContentSource(),
 		},
 	}, nil
 }
@@ -428,6 +443,10 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		shareName = s
 	}
 	if err := reqService.DeleteVolume("zfs", container, shareName, volumeId); err != nil {
+		if webapi.IsHasSnapshots(err) {
+			// Deleting the dataset would destroy its snapshots; retried after they go.
+			return nil, status.Errorf(codes.FailedPrecondition, "Volume(%s) has snapshots: %v", volumeId, err)
+		}
 		return nil, status.Errorf(codes.Internal, "Failed to DeleteVolume(%s), err: %v", volumeId, err)
 	}
 
@@ -864,16 +883,4 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 
 func (cs *ControllerServer) ControllerModifyVolume(ctx context.Context, req *csi.ControllerModifyVolumeRequest) (*csi.ControllerModifyVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "ControllerModifyVolume is not supported")
-}
-
-func (cs *ControllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "CreateSnapshot is not supported")
-}
-
-func (cs *ControllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "DeleteSnapshot is not supported")
-}
-
-func (cs *ControllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ListSnapshots is not supported")
 }

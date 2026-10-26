@@ -30,6 +30,22 @@ sidecars:
     repository: registry.k8s.io/sig-storage/livenessprobe
     tag: v2.13.1
     pullPolicy: IfNotPresent
+  snapshotter:
+    repository: registry.k8s.io/sig-storage/csi-snapshotter
+    tag: v8.2.0
+    pullPolicy: IfNotPresent
+
+# VolumeSnapshot (ZFS only). Needs the snapshot CRDs and snapshot-controller in the
+# cluster (kubernetes-csi/external-snapshotter, installed once per cluster).
+snapshot:
+  enabled: true
+  timeout: 300s
+  # VolumeSnapshotClass; created only when the snapshot CRDs are present.
+  class:
+    create: true
+    name: flexa-snapclass-zfs
+    deletionPolicy: Delete
+    isDefault: false
 
 # kubelet restarts csi-plugin when its gRPC Probe stops answering.
 livenessProbe:

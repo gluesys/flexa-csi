@@ -11,8 +11,9 @@ type CreateVolumeSpec struct {
 	VolumeId         string // Volume UUID
 	PoolName         string // Pool Name
 	Size             int64  // Volume Size
-	SourceSnapshotId string // Volume Snapshot ID
-	SourceVolumeId   string // Source Volume ID
+	SourceSnapshotId string // restore: backend snapshot name (ZFS)
+	SourceVolumeId   string // restore: backend volume holding that snapshot
+	ShareDir         string // ZFS: exported directory in the volume ("" = share name)
 	Fs               string // Default : zfs , TODO : lustre
 	OptionSVS        string // zfs volume options
 	OptionISS        string // zfs volume options

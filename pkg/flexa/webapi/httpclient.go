@@ -35,6 +35,7 @@ type APIError struct {
 	Status int
 	Msg    string
 	Path   string
+	Code   string // provisiond error.code, when given
 }
 
 func (e *APIError) Error() string {
@@ -47,11 +48,14 @@ func (e *APIError) Error() string {
 // newAPIError keeps the proxy's "msg" so the caller sees why the call failed.
 func newAPIError(status int, body []byte, path string) *APIError {
 	var e struct {
-		Msg string `json:"msg"`
+		Msg   string `json:"msg"`
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
 	}
-	msg := ""
+	msg, code := "", ""
 	if json.Unmarshal(body, &e) == nil {
-		msg = e.Msg
+		msg, code = e.Msg, e.Error.Code
 	}
 	if msg == "" {
 		msg = strings.TrimSpace(string(body))
@@ -59,7 +63,7 @@ func newAPIError(status int, body []byte, path string) *APIError {
 			msg = msg[:512]
 		}
 	}
-	return &APIError{Status: status, Msg: msg, Path: path}
+	return &APIError{Status: status, Msg: msg, Path: path, Code: code}
 }
 
 // IsMissing reports a proxy answer saying that the named object does not

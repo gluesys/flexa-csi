@@ -13,10 +13,11 @@ Driver Name: `csi.flexa.com`
 The Gluesys FlexA CSI driver supports:
 
 - **Access modes (CSI):** `SINGLE_NODE_WRITER`, `MULTI_NODE_MULTI_WRITER` (typical Kubernetes mapping: RWO and RWX-style multi-writer NFS where applicable).
-- **Controller:** Create/Delete volume, List volumes, Get capacity.
+- **Controller:** Create/Delete volume, List volumes, Get capacity, Create/Delete snapshot (ZFS).
 - **Node:** Stage/Unstage (no-op for the current NFS flow), Publish/Unpublish, Get volume stats.
 
-**Not supported at this time:** snapshots, cloning. Volume expansion is supported (expand-only; shrink is not supported).
+Volume snapshots and restore from a snapshot are supported for ZFS volumes (see [Volume snapshots](#volume-snapshots-zfs)).
+**Not supported at this time:** Lustre snapshots, cloning a PVC directly (`dataSource: PersistentVolumeClaim`). Volume expansion is supported (expand-only; shrink is not supported).
 
 ## Prerequisites
 
@@ -66,9 +67,9 @@ Create the namespace first if it does not exist (`kubectl create namespace flexa
 
 ## CSI Driver Configuration
 
-You need a **Secret** (`client-info.yml`) and **StorageClasses**. Volume snapshots are **not** implemented; do not rely on `VolumeSnapshotClass` until support exists.
+You need a **Secret** (`client-info.yml`) and **StorageClasses**. For ZFS snapshots, see [Volume snapshots](#volume-snapshots-zfs).
 
-Contents: [client-info / Secret](#client-info--secret) · [StorageClasses](#creating-storage-classes) · [PVC annotations](#pvc-annotations) · [Pod annotations](#pod-annotations) · [VolumeContext](#volumecontext-advanced)
+Contents: [client-info / Secret](#client-info--secret) · [StorageClasses](#creating-storage-classes) · [Volume snapshots](#volume-snapshots-zfs) · [PVC annotations](#pvc-annotations) · [Pod annotations](#pod-annotations) · [VolumeContext](#volumecontext-advanced)
 
 ### client-info / Secret
 
@@ -174,6 +175,35 @@ Apply raw YAML:
 ```bash
 kubectl apply -f <storageclass_yaml>
 ```
+
+### Volume snapshots (ZFS)
+
+The chart adds the `csi-snapshotter` sidecar (`snapshot.enabled`, default `true`) and a
+`VolumeSnapshotClass` named `flexa-snapclass-zfs` (`snapshot.class.*`). The cluster needs the
+snapshot CRDs and `snapshot-controller` from
+[external-snapshotter](https://github.com/kubernetes-csi/external-snapshotter) (once per
+cluster, before installing the chart; the class is created only when the CRDs exist):
+
+```bash
+B=https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v8.2.0
+for f in client/config/crd/snapshot.storage.k8s.io_volumesnapshotclasses.yaml \
+         client/config/crd/snapshot.storage.k8s.io_volumesnapshotcontents.yaml \
+         client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml \
+         deploy/kubernetes/snapshot-controller/rbac-snapshot-controller.yaml \
+         deploy/kubernetes/snapshot-controller/setup-snapshot-controller.yaml; do
+  kubectl apply -f $B/$f
+done
+```
+
+Behavior:
+
+- A snapshot is a ZFS snapshot of the PVC's dataset, ready immediately. It shows in the
+  FlexA UI snapshot list; the FlexA UI/REST API cannot delete it (or the PVC's volume).
+- Restore with `dataSource: {kind: VolumeSnapshot, ...}` in a PVC of a StorageClass on the
+  **same pool**. The new volume is an independent copy (`zfs send | recv`), at least as large
+  as the source, so the snapshot and the source PVC can be deleted afterwards.
+- A PVC whose volume still has snapshots is not deleted on the storage: its PV stays
+  `Released` (`FailedPrecondition`) and is deleted once the snapshots are gone.
 
 ### PVC annotations
 

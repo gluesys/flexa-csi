@@ -104,8 +104,14 @@ func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*model
 		}
 		baseDir = resp.Path
 	} else {
-		// Create ZFS Volume
-		err := service.fep.ZfsCreateVolume(spec.Size, volId, volName, poolName, optionSVS, optionISS, optionComp, optionDedup)
+		// Create ZFS Volume (a copy of a snapshot when restoring)
+		var err error
+		if spec.SourceSnapshotId != "" {
+			err = service.fep.ZfsCreateVolumeFromSnapshot(spec.Size, volName, poolName, optionSVS, optionISS,
+				optionComp, optionDedup, spec.SourceVolumeId, spec.SourceSnapshotId)
+		} else {
+			err = service.fep.ZfsCreateVolume(spec.Size, volId, volName, poolName, optionSVS, optionISS, optionComp, optionDedup)
+		}
 		if err != nil {
 			log.Errorf("Gluesys FlexA Call(CreateVolume) : Fail Create Volume(%s)", volName)
 			return nil, err
@@ -146,7 +152,7 @@ func (service *FlexAService) CreateZfsShare(spec *models.CreateVolumeSpec) (*mod
 }
 
 func (service *FlexAService) createZfsShare(spec *models.CreateVolumeSpec) (string, error) {
-	baseDir, err := service.fep.ZfsCreateShareNfs(spec.VolumeId, spec.VolumeName, spec.PoolName,
+	baseDir, err := service.fep.ZfsCreateShareNfs(spec.VolumeId, spec.VolumeName, spec.PoolName, spec.ShareDir,
 		spec.SecureName, spec.SecureAddr, spec.SecureSub, spec.NfsAccess, spec.NfsNoRoot, spec.NfsInsecure)
 	if err != nil {
 		log.Errorf("Gluesys FlexA Call(CreateShare) : Fail Create Share in Volume(%s)", spec.VolumeName)
@@ -225,6 +231,16 @@ func (service *FlexAService) DeleteVolume(fs string, poolName string, shareName 
 	log.Infof("Gluesys FlexA Call(DeleteVolume) : Success Delete Volume(%s)", volName)
 
 	return nil
+}
+
+// CreateZfsSnapshot snapshots a ZFS volume (pool/vol@snapName).
+func (service *FlexAService) CreateZfsSnapshot(poolName, volName, snapName string) (webapi.ZfsSnapshot, error) {
+	return service.fep.ZfsCreateSnapshot(poolName, volName, snapName)
+}
+
+// DeleteZfsSnapshot deletes pool/vol@snapName; an already missing one is not an error.
+func (service *FlexAService) DeleteZfsSnapshot(poolName, volName, snapName string) error {
+	return service.fep.ZfsDeleteSnapshot(poolName, volName, snapName)
 }
 
 func (service *FlexAService) ListPools() ([]string, error) {
