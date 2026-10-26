@@ -36,9 +36,19 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.controller.affinity }}
+      {{- if .Values.controller.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml .Values.controller.affinity | nindent 8 }}
+      {{- else if and .Values.controller.hostNetwork (gt (int .Values.controller.replicas) 1) }}
+      # hostNetwork replicas on one node would share the health port.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "flexa-csi.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: controller
       {{- end }}
       containers:
         - name: csi-provisioner

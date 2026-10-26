@@ -261,6 +261,29 @@ func TestCreateVolumeIsIdempotentAndNeverSmaller(t *testing.T) {
 	if _, err := cs.CreateVolume(ctx, createReq("pvc-1", 3*utils.UNIT_GB)); status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("larger repeat = %v, want AlreadyExists", err)
 	}
+
+	// One byte more than an existing 1GiB volume is still too small.
+	for _, provisiond := range []bool{false, true} {
+		proxy.provisiond = provisiond
+		proxy.pools["pool1"]["pvc-g"] = &fakeVol{sizeMb: 1024, share: "pvc-g"}
+		if _, err := cs.CreateVolume(ctx, createReq("pvc-g", utils.UNIT_GB+1)); status.Code(err) != codes.AlreadyExists {
+			t.Fatalf("provisiond=%t: 1GiB+1 over a 1GiB volume = %v, want AlreadyExists", provisiond, err)
+		}
+	}
+}
+
+func TestShareOnlyRetryReportsBackendSize(t *testing.T) {
+	proxy, info := newFakeProxy(t, "pool1")
+	cs, _ := newTestController(t, info)
+	// Legacy proxy: the dataset exists at 2GiB, the retry asks for 1GiB.
+	proxy.pools["pool1"]["pvc-1"] = &fakeVol{sizeMb: 2048}
+	resp, err := cs.CreateVolume(context.Background(), createReq("pvc-1", utils.UNIT_GB))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got := resp.GetVolume().GetCapacityBytes(); got != 2*utils.UNIT_GB {
+		t.Fatalf("capacity = %d, want the dataset's 2GiB", got)
+	}
 }
 
 func TestCreateVolumeRetryAfterSlowCreate(t *testing.T) {

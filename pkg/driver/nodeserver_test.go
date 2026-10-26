@@ -303,3 +303,100 @@ func TestVolumeLockAbortsConcurrentRequest(t *testing.T) {
 		r()
 	}
 }
+
+func TestUnpublishSurvivesCorruptMeta(t *testing.T) {
+	fm := mount.NewFakeMounter(nil)
+	ns, root := newTestNodeServer(t, fm, nfsPod("a", nil))
+	ctx := context.Background()
+	target := filepath.Join(root, "t1")
+	if _, err := ns.NodePublishVolume(ctx, nfsPublishReq("pvc-1", target, "a", false,
+		csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER)); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	group := ns.getNfsGroupPath("pvc-1", nil)
+	// A half-written meta, as a crash of an older driver could leave behind.
+	if err := os.WriteFile(ns.metaFile("pvc-1", target), []byte(`{"VolumeId":"pv`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ns.NodeUnpublishVolume(ctx, &csi.NodeUnpublishVolumeRequest{VolumeId: "pvc-1", TargetPath: target}); err != nil {
+		t.Fatalf("unpublish with a corrupt meta: %v", err)
+	}
+	if _, ok := mountedAt(fm, group); ok {
+		t.Fatal("unused group mount kept after dropping the corrupt meta")
+	}
+	if _, err := os.Stat(ns.metaFile("pvc-1", target)); !os.IsNotExist(err) {
+		t.Fatalf("corrupt meta still there: %v", err)
+	}
+}
+
+func TestCorruptMetaSweepKeepsGroupsInUse(t *testing.T) {
+	fm := mount.NewFakeMounter(nil)
+	ns, root := newTestNodeServer(t, fm, nfsPod("a", nil), nfsPod("b", nil))
+	ctx := context.Background()
+	rwx := csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER
+	t1, t2 := filepath.Join(root, "t1"), filepath.Join(root, "t2")
+	for _, r := range []*csi.NodePublishVolumeRequest{
+		nfsPublishReq("pvc-1", t1, "a", false, rwx), nfsPublishReq("pvc-1", t2, "b", false, rwx),
+	} {
+		if _, err := ns.NodePublishVolume(ctx, r); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+	}
+	if err := os.WriteFile(ns.metaFile("pvc-1", t1), []byte("{"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ns.NodeUnpublishVolume(ctx, &csi.NodeUnpublishVolumeRequest{VolumeId: "pvc-1", TargetPath: t1}); err != nil {
+		t.Fatalf("unpublish: %v", err)
+	}
+	if _, ok := mountedAt(fm, ns.getNfsGroupPath("pvc-1", nil)); !ok {
+		t.Fatal("group mount released while t2 still uses it")
+	}
+}
+
+func TestRepublishKeepsExistingGroup(t *testing.T) {
+	fm := mount.NewFakeMounter(nil)
+	ns, root := newTestNodeServer(t, fm, nfsPod("a", nil))
+	ctx := context.Background()
+	target := filepath.Join(root, "t1")
+	req := nfsPublishReq("pvc-1", target, "a", false, csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER)
+	if _, err := ns.NodePublishVolume(ctx, req); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	oldGroup := ns.getNfsGroupPath("pvc-1", nil)
+
+	// The retry asks for other options, so it would compute another group.
+	req.VolumeCapability.GetMount().MountFlags = []string{"noatime"}
+	if _, err := ns.NodePublishVolume(ctx, req); err != nil {
+		t.Fatalf("republish: %v", err)
+	}
+	if _, ok := mountedAt(fm, ns.getNfsGroupPath("pvc-1", []string{"noatime"})); ok {
+		t.Fatal("republish mounted a second group the target never uses")
+	}
+	meta, err := ns.loadNfsVolMeta("pvc-1", target)
+	if err != nil || meta.StagingGroupPath != oldGroup {
+		t.Fatalf("meta group = %v (%v), want %s", meta, err, oldGroup)
+	}
+
+	if _, err := ns.NodeUnpublishVolume(ctx, &csi.NodeUnpublishVolumeRequest{VolumeId: "pvc-1", TargetPath: target}); err != nil {
+		t.Fatalf("unpublish: %v", err)
+	}
+	if _, ok := mountedAt(fm, oldGroup); ok {
+		t.Fatal("original group left mounted")
+	}
+}
+
+func TestSaveMetaLeavesNoTempFiles(t *testing.T) {
+	ns, root := newTestNodeServer(t, mount.NewFakeMounter(nil))
+	target := filepath.Join(root, "t1")
+	if err := ns.saveNfsVolMeta("pvc-1", target, "/g", "src", nil); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(ns.metaDir("pvc-1"))
+	if len(entries) != 1 || filepath.Ext(entries[0].Name()) != ".json" {
+		t.Fatalf("meta dir = %v, want exactly one .json", entries)
+	}
+	if m, err := ns.loadNfsVolMeta("pvc-1", target); err != nil || m.StagingGroupPath != "/g" {
+		t.Fatalf("reload = %v, %v", m, err)
+	}
+}

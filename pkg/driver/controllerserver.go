@@ -324,10 +324,9 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 	if k8sVolume != nil {
 		// Size 0 means the backend could not report a size (e.g. Lustre quota not
-		// yet visible in Redis); do not treat that as a capacity conflict. Volumes
-		// made before sizes were rounded up may be short by less than 1MiB.
+		// yet visible in Redis); do not treat that as a capacity conflict.
 		required := req.GetCapacityRange().GetRequiredBytes()
-		if k8sVolume.Size > 0 && k8sVolume.Size < utils.BytesToMB(required)*utils.UNIT_MB {
+		if k8sVolume.Size > 0 && k8sVolume.Size < required {
 			return nil, status.Errorf(codes.AlreadyExists,
 				"Volume [%s] already exists but is smaller than requested capacity", volName)
 		}
@@ -345,8 +344,13 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		// The legacy proxy reports no share path, and an earlier attempt may have
 		// stopped between dataset and share: make sure the share is there.
 		log.Infof("Volume [%s] exists without a known share path; ensuring the share", volName)
+		existingSize := k8sVolume.Size
 		if k8sVolume, err = reqService.CreateZfsShare(spec); err != nil {
 			return nil, status.Errorf(codes.Internal, "Failed to create share for volume %s: %v", volName, err)
+		}
+		// The dataset was not touched: report its size, not the requested one.
+		if existingSize > 0 {
+			k8sVolume.Size = existingSize
 		}
 	default:
 		log.Debugf("Volume [%s] already exists , backing name: [%s]", volName, k8sVolume.VolumeName)

@@ -137,7 +137,35 @@ func (ns *NodeServer) saveNfsVolMeta(volId string, targetPath string, stagingGro
 		return err
 	}
 
-	return os.WriteFile(metaFile, jsonData, 0644)
+	// Write a temporary file and rename it, so a crash never leaves a
+	// truncated meta behind for unpublish to trip over.
+	tmp, err := os.CreateTemp(ns.metaDir(volId), ".meta-*")
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.Write(jsonData); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0644); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Rename(tmp.Name(), metaFile); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return nil
 }
 
 func (ns *NodeServer) loadNfsVolMeta(volId string, targetPath string) (*models.NfsVolMeta, error) {
@@ -213,6 +241,51 @@ func (ns *NodeServer) otherGroupUsers(volId string, targetPath string, groupPath
 		}
 	}
 	return users, nil
+}
+
+// releaseGroup unmounts groupPath once no target other than targetPath uses it.
+func (ns *NodeServer) releaseGroup(volId string, targetPath string, groupPath string) error {
+	if groupPath == "" {
+		return nil
+	}
+	users, err := ns.otherGroupUsers(volId, targetPath, groupPath)
+	if err != nil {
+		return fmt.Errorf("failed to read volume meta: %w", err)
+	}
+	log.Infof("NodeServer : group(%s) other users -> %d", groupPath, users)
+	if users > 0 {
+		return nil
+	}
+
+	log.Infof("NodeServer : Unmount stagingGroupPath(%s)", groupPath)
+	if err := mount.CleanupMountPoint(groupPath, ns.Mounter.Interface, true); err != nil {
+		return fmt.Errorf("failed to unmount group path %s: %w", groupPath, err)
+	}
+	// Drop the now-empty <volume>/<options-hash> parents too; Remove leaves
+	// anything that is not empty alone.
+	hashDir := filepath.Dir(groupPath)
+	_ = os.Remove(hashDir)
+	_ = os.Remove(filepath.Dir(hashDir))
+	return nil
+}
+
+// releaseUnusedGroups releases every group mount of volId (current layout) that
+// no readable meta of a still-mounted target refers to.
+func (ns *NodeServer) releaseUnusedGroups(volId string) error {
+	root := ns.groupRoot
+	if root == "" {
+		root = defaultNfsGroupRoot
+	}
+	groups, err := filepath.Glob(filepath.Join(root, volId, "*", "mount"))
+	if err != nil {
+		return err
+	}
+	for _, g := range groups {
+		if err := ns.releaseGroup(volId, "", g); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // mountOptions returns the NFS mount options: the capability's mount_flags
@@ -594,6 +667,21 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		return nil, status.Error(codes.InvalidArgument, "NFS server address missing: set flexa.io/serviceVIP on pod or ensure VolumeContext.vip is set")
 	}
 
+	readonly := req.GetReadonly() || slices.Contains(stagingOptions, "ro") || isReadOnlyAccessMode(req.GetVolumeCapability())
+
+	// A repeated publish of a target that is still bound keeps the group it is
+	// bound to (an older layout, or other options at the time); recording a new
+	// group here would leave the real one behind at unpublish.
+	if meta, err := ns.loadNfsVolMeta(volumeId, targetPath); err == nil && meta.StagingGroupPath != "" {
+		if mounted, err := ns.Mounter.Interface.IsMountPoint(targetPath); err == nil && mounted {
+			if err := ns.publishBind(meta.StagingGroupPath, targetPath, readonly); err != nil {
+				return nil, err
+			}
+			log.Infof("NodePublishVolume: %s already bound to %s", targetPath, meta.StagingGroupPath)
+			return &csi.NodePublishVolumeResponse{}, nil
+		}
+	}
+
 	source := fmt.Sprintf("%s:%s", svip, req.VolumeContext["baseDir"])
 	stagingGroupPath := ns.getNfsGroupPath(volumeId, stagingOptions)
 
@@ -609,7 +697,6 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	readonly := req.GetReadonly() || slices.Contains(stagingOptions, "ro") || isReadOnlyAccessMode(req.GetVolumeCapability())
 	if err := ns.publishBind(stagingGroupPath, targetPath, readonly); err != nil {
 		return nil, err
 	}
@@ -641,35 +728,30 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 	}
 
 	nfsVolMeta, metaErr := ns.loadNfsVolMeta(volumeId, targetPath)
-	if metaErr != nil && !os.IsNotExist(metaErr) {
-		return nil, status.Errorf(codes.Internal, "failed to read volume meta: %v", metaErr)
-	}
-	if metaErr != nil {
+	switch {
+	case os.IsNotExist(metaErr):
 		// No NFS meta: a Lustre bind (NodeUnstageVolume releases the Lustre mount)
 		// or an NFS target whose cleanup already finished.
 		log.Infof("NodeUnpublishVolume: target(%s) unmounted", targetPath)
+		return &csi.NodeUnpublishVolumeResponse{}, nil
+	case metaErr != nil:
+		// An unreadable meta (e.g. left half-written by an older driver) must not
+		// block teardown forever: drop it and release every group mount of this
+		// volume that no remaining target uses.
+		log.Warnf("NodeUnpublishVolume: dropping unreadable meta of %s: %v", targetPath, metaErr)
+		if err := ns.deleteNfsVolMeta(volumeId, targetPath); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to remove broken meta: %v", err)
+		}
+		if err := ns.releaseUnusedGroups(volumeId); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to release group mounts: %v", err)
+		}
 		return &csi.NodeUnpublishVolumeResponse{}, nil
 	}
 
 	// The meta is removed last: if releasing the group mount fails, the retry
 	// still finds it and finishes the job.
-	groupPath := nfsVolMeta.StagingGroupPath
-	users, err := ns.otherGroupUsers(volumeId, targetPath, groupPath)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to read volume meta: %v", err)
-	}
-	log.Infof("NodeServer : group(%s) other users -> %d", groupPath, users)
-
-	if users == 0 && groupPath != "" {
-		log.Infof("NodeServer : Unmount stagingGroupPath(%s)", groupPath)
-		if err := mount.CleanupMountPoint(groupPath, ns.Mounter.Interface, true); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to unmount group path %s: %v", groupPath, err)
-		}
-		// Drop the now-empty <volume>/<options-hash> parents too; Remove leaves
-		// anything that is not empty alone.
-		hashDir := filepath.Dir(groupPath)
-		_ = os.Remove(hashDir)
-		_ = os.Remove(filepath.Dir(hashDir))
+	if err := ns.releaseGroup(volumeId, targetPath, nfsVolMeta.StagingGroupPath); err != nil {
+		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
 
 	if err := ns.deleteNfsVolMeta(volumeId, targetPath); err != nil {
