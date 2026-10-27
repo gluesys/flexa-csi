@@ -21,6 +21,9 @@ parameters:
   {{- fail (printf "values.storageClass.%s: set poolName (ZFS) or clusterName (Lustre)" $key) }}
 {{- end }}
   protocol: {{ $sc.protocol | quote }}
+{{- with $sc.volumeNameFormat }}
+  volumeNameFormat: {{ . | quote }}
+{{- end }}
 {{- range $opt, $val := $sc.volumeDefaults }}
   flexa.io/{{ $opt }}: {{ $val | quote }}
 {{- end }}

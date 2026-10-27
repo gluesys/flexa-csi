@@ -267,9 +267,13 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	pvcQos := opt(volAttrPvcQos)
 	log.Infof("PVC QoS : %s", pvcQos)
 
-	// CSI VolumeHandle and backend volume name: same as provisioner volume name (no k8s-csi- prefix).
-	backingName := volName
-	volumeID := volName
+	// CSI VolumeHandle and backend volume name: provisioner volume name by default,
+	// or the StorageClass volumeNameFormat (e.g. "{namespace}_{pvname}").
+	backingName, err := renderVolumeName(params[paramVolumeNameFormat], fs, volName, pvcNS, pvcName)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	volumeID := backingName
 
 	poolOrCluster := poolName
 	if fs == "lustre" {
@@ -322,9 +326,9 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	reqService := service.NewFlexAService()
 	reqService.SetFep(proxy)
 
-	k8sVolume, err := reqService.GetVolume(fs, poolOrCluster, volName)
+	k8sVolume, err := reqService.GetVolume(fs, poolOrCluster, backingName)
 	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "Failed to look up volume %s: %v", volName, err)
+		return nil, status.Errorf(codes.Unavailable, "Failed to look up volume %s: %v", backingName, err)
 	}
 	if k8sVolume != nil {
 		// Size 0 means the backend could not report a size (e.g. Lustre quota not
@@ -332,38 +336,38 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		required := req.GetCapacityRange().GetRequiredBytes()
 		if k8sVolume.Size > 0 && k8sVolume.Size < required {
 			return nil, status.Errorf(codes.AlreadyExists,
-				"Volume [%s] already exists but is smaller than requested capacity", volName)
+				"Volume [%s] already exists but is smaller than requested capacity", backingName)
 		}
 		if limit := req.GetCapacityRange().GetLimitBytes(); limit > 0 && k8sVolume.Size > limit {
 			return nil, status.Errorf(codes.AlreadyExists,
-				"Volume [%s] already exists but is larger than limitBytes", volName)
+				"Volume [%s] already exists but is larger than limitBytes", backingName)
 		}
 	}
 	switch {
 	case k8sVolume == nil:
 		if k8sVolume, err = reqService.CreateVolume(spec); err != nil {
 			if srcSnap != "" && webapi.IsTooSmall(err) {
-				return nil, status.Errorf(codes.OutOfRange, "volume %s: %v", volName, err)
+				return nil, status.Errorf(codes.OutOfRange, "volume %s: %v", backingName, err)
 			}
 			if srcSnap != "" && webapi.IsMissing(err, "Snapshot("+srcVolume+"@"+srcSnap+")", "Source volume("+srcVolume+")") {
 				return nil, status.Errorf(codes.NotFound, "snapshot %s@%s does not exist: %v", srcVolume, srcSnap, err)
 			}
-			return nil, status.Errorf(codes.Internal, "Failed to create volume %s: %v", volName, err)
+			return nil, status.Errorf(codes.Internal, "Failed to create volume %s: %v", backingName, err)
 		}
 	case fs == "zfs" && strings.TrimSpace(k8sVolume.BaseDir) == "":
 		// The legacy proxy reports no share path, and an earlier attempt may have
 		// stopped between dataset and share: make sure the share is there.
-		log.Infof("Volume [%s] exists without a known share path; ensuring the share", volName)
+		log.Infof("Volume [%s] exists without a known share path; ensuring the share", backingName)
 		existingSize := k8sVolume.Size
 		if k8sVolume, err = reqService.CreateZfsShare(spec); err != nil {
-			return nil, status.Errorf(codes.Internal, "Failed to create share for volume %s: %v", volName, err)
+			return nil, status.Errorf(codes.Internal, "Failed to create share for volume %s: %v", backingName, err)
 		}
 		// The dataset was not touched: report its size, not the requested one.
 		if existingSize > 0 {
 			k8sVolume.Size = existingSize
 		}
 	default:
-		log.Debugf("Volume [%s] already exists , backing name: [%s]", volName, k8sVolume.VolumeName)
+		log.Debugf("Volume [%s] already exists , backing name: [%s]", backingName, k8sVolume.VolumeName)
 	}
 
 	capacity := k8sVolume.Size

@@ -121,6 +121,8 @@ Parameter names are **case-sensitive** (`poolName`, not `poolname`).
 
 **Helm:** Define entries under `storageClass` in [`charts/flexa-csi/values.yaml`](charts/flexa-csi/values.yaml). Each key can enable a class; ZFS entries set `poolName`, Lustre entries set `clusterName`. The chart template is [`charts/flexa-csi/templates/storageclass.yaml`](charts/flexa-csi/templates/storageclass.yaml).
 
+**Backend volume name (optional):** `volumeNameFormat` sets the name of the FlexA volume/share (Lustre directory, ZFS dataset). The default is `{pvname}` (`pvc-<uid>`). Placeholders: `{pvname}` (required), `{namespace}`, `{pvcname}`. Use `_` as the separator, for example `{namespace}_{pvname}` gives `gluesys05_pvc-<uid>`; it is valid for both Lustre and ZFS and never appears in a namespace name. Lustre allows `[A-Za-z0-9._-]`; ZFS allows `[A-Za-z0-9_-]` and must start with a letter; at most 128 characters. A name that breaks these rules fails CreateVolume with `InvalidArgument`. StorageClass parameters cannot be changed in place, so recreate the class to change it. Existing volumes keep their names.
+
 **Raw YAML examples:** [`deploy/kubernetes/storage-class-zfs.yml`](deploy/kubernetes/storage-class-zfs.yml), [`deploy/kubernetes/storage-class-lustre.yml`](deploy/kubernetes/storage-class-lustre.yml)
 
 **ZFS example:**

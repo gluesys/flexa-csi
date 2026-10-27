@@ -18,27 +18,38 @@ package driver
 
 import (
 	"context"
+	"regexp"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
+// embeddedPVName finds the provisioner PV name (pvc-<uid>) inside a volume ID.
+var embeddedPVName = regexp.MustCompile(`pvc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
 // lookupPVAttributes returns the CSI volume attributes of the PV whose
 // volumeHandle is volumeID. found is false only when no such PV exists; an API
 // failure is returned as err so callers never treat an outage as "deleted".
 //
-// Dynamically provisioned PVs are named after the volume ID, so a GET usually
-// answers; statically created PVs fall back to a list.
+// Dynamically provisioned PVs are named after the volume ID, or contain the PV
+// name when volumeNameFormat is set, so a GET usually answers; statically
+// created PVs fall back to a list.
 func lookupPVAttributes(ctx context.Context, client kubernetes.Interface, volumeID string) (map[string]string, bool, error) {
-	pv, err := client.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
-	switch {
-	case err == nil:
-		if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeHandle == volumeID {
-			return pv.Spec.CSI.VolumeAttributes, true, nil
+	names := []string{volumeID}
+	if pvName := embeddedPVName.FindString(volumeID); pvName != "" && pvName != volumeID {
+		names = append(names, pvName)
+	}
+	for _, name := range names {
+		pv, err := client.CoreV1().PersistentVolumes().Get(ctx, name, metav1.GetOptions{})
+		switch {
+		case err == nil:
+			if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeHandle == volumeID {
+				return pv.Spec.CSI.VolumeAttributes, true, nil
+			}
+		case !apierrors.IsNotFound(err):
+			return nil, false, err
 		}
-	case !apierrors.IsNotFound(err):
-		return nil, false, err
 	}
 
 	pvs, err := client.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
