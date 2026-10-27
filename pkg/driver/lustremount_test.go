@@ -65,6 +65,20 @@ func TestLustreMountRetriesEIO(t *testing.T) {
 	}
 }
 
+func TestLustreMountRetriesShutdown(t *testing.T) {
+	calls := 0
+	withLustreMountExec(t, func(context.Context, string, string, []string) error {
+		calls++
+		if calls == 1 {
+			return errors.New("mount.lustre: mount x at y failed: Cannot send after transport endpoint shutdown: exit status 108")
+		}
+		return nil
+	})
+	if err := lustreMount(context.Background(), "src", "dst", nil); err != nil || calls != 2 {
+		t.Fatalf("err=%v calls=%d, want success after 2 calls", err, calls)
+	}
+}
+
 func TestLustreMountGivesUpAfterRetries(t *testing.T) {
 	calls := 0
 	withLustreMountExec(t, func(context.Context, string, string, []string) error {
