@@ -49,6 +49,7 @@ func (fep *FEP) LustreCreateVolume(
 	optionNoRootSquashing string,
 	optionInsecure string,
 	pvcQos string,
+	noExport bool,
 ) (LustreVolumeCreateResponse, error) {
 	if clusterName == "" || volName == "" {
 		return LustreVolumeCreateResponse{}, fmt.Errorf("clusterName and volName are required")
@@ -69,6 +70,10 @@ func (fep *FEP) LustreCreateVolume(
 	}
 	if s := strings.TrimSpace(pvcQos); s != "" {
 		body["pvcQos"] = s
+	}
+	if noExport {
+		// Native mounts do not use NFS. provisiond without this option ignores it and exports.
+		body["export"] = "off"
 	}
 
 	cgiPath := fmt.Sprintf("lustre/cluster/%s/volume/%s/create", clusterName, volName)

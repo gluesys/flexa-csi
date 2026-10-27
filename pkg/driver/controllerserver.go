@@ -297,6 +297,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		NfsNoRoot:   nfsNoRoot,
 		NfsInsecure: nfsInsecure,
 		PvcQos:      pvcQos,
+		NoExport:    fs == "lustre" && params["protocol"] == "lustre",
 
 		SourceVolumeId:   srcVolume,
 		SourceSnapshotId: srcSnap,
