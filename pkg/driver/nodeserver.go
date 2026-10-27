@@ -464,6 +464,26 @@ func lustreMountViaHost(ctx context.Context, source, target string, options []st
 	return nil
 }
 
+// lustreUmount is replaced in tests.
+var lustreUmount = lustreUmountViaHost
+
+// listedMount reports whether path is in the mount table. A Lustre subdirectory
+// mount whose directory was already deleted on the server (DeleteVolume does not
+// wait for unstage when attachRequired is false) fails stat with ENOENT while it
+// is still mounted, so stat alone would leak the mount.
+func (ns *NodeServer) listedMount(path string) bool {
+	mps, err := ns.Mounter.Interface.List()
+	if err != nil {
+		return false
+	}
+	for _, mp := range mps {
+		if mp.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
 func lustreUmountViaHost(ctx context.Context, target string) error {
 	args := []string{"--target", "1", "--mount", "--", "umount", target}
 
@@ -574,7 +594,11 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 	switch {
 	case err == nil:
 	case os.IsNotExist(err):
-		return &csi.NodeUnstageVolumeResponse{}, nil
+		if !ns.listedMount(stagingPath) {
+			return &csi.NodeUnstageVolumeResponse{}, nil
+		}
+		log.Warnf("NodeUnstageVolume: %s is still mounted but its volume directory is gone; unmounting", stagingPath)
+		mounted = true
 	case mount.IsCorruptedMnt(err):
 		log.Warnf("NodeUnstageVolume: %s is a broken mount (%v); unmounting", stagingPath, err)
 		mounted = true
@@ -584,7 +608,7 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 
 	if mounted {
 		log.Infof("NodeUnstageVolume: unmounting stagingPath(%s)", stagingPath)
-		if err := lustreUmountViaHost(ctx, stagingPath); err != nil {
+		if err := lustreUmount(ctx, stagingPath); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to unmount staging path %s: %v", stagingPath, err)
 		}
 	}
@@ -715,6 +739,15 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 		return nil, err
 	}
 	defer release()
+
+	// CleanupMountPoint skips a target that stat cannot find, so a bind of a
+	// volume deleted on the server is unmounted here first.
+	if _, err := os.Stat(targetPath); os.IsNotExist(err) && ns.listedMount(targetPath) {
+		log.Warnf("NodeUnpublishVolume: %s is still mounted but its volume directory is gone; unmounting", targetPath)
+		if err := ns.Mounter.Unmount(targetPath); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to unmount target path %s: %v", targetPath, err)
+		}
+	}
 
 	// Unmounts the target (also a broken one) and removes the empty directory;
 	// a missing or unmounted target is fine, so retries converge.
