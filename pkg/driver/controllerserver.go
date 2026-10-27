@@ -298,6 +298,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		NfsInsecure: nfsInsecure,
 		PvcQos:      pvcQos,
 		NoExport:    fs == "lustre" && params["protocol"] == "lustre",
+		SubDir:      lustreSubDir(fs, pvcNS),
 
 		SourceVolumeId:   srcVolume,
 		SourceSnapshotId: srcSnap,

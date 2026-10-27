@@ -563,7 +563,7 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	}
 
 	mgsSpec := strings.Join(nids, ":")
-	source := fmt.Sprintf("%s:/%s/%s", mgsSpec, clusterName, volumeId)
+	source := lustreMountSource(mgsSpec, clusterName, volumeId, req.VolumeContext["baseDir"])
 
 	log.Infof("NodeStageVolume: mounting Lustre source(%s) on stagingPath(%s)", source, stagingPath)
 	if err := lustreMountViaHost(ctx, source, stagingPath, req.GetVolumeCapability().GetMount().GetMountFlags()); err != nil {

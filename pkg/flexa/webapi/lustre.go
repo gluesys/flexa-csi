@@ -50,6 +50,7 @@ func (fep *FEP) LustreCreateVolume(
 	optionInsecure string,
 	pvcQos string,
 	noExport bool,
+	subDir string,
 ) (LustreVolumeCreateResponse, error) {
 	if clusterName == "" || volName == "" {
 		return LustreVolumeCreateResponse{}, fmt.Errorf("clusterName and volName are required")
@@ -74,6 +75,11 @@ func (fep *FEP) LustreCreateVolume(
 	if noExport {
 		// Native mounts do not use NFS. provisiond without this option ignores it and exports.
 		body["export"] = "off"
+	}
+	if subDir != "" {
+		// provisiond without this option ignores it and creates the volume at the
+		// filesystem root; callers use the returned path, so both work.
+		body["subDir"] = subDir
 	}
 
 	cgiPath := fmt.Sprintf("lustre/cluster/%s/volume/%s/create", clusterName, volName)

@@ -24,7 +24,7 @@ func TestLustreCreateVolumeSendsExportOffForNativeMount(t *testing.T) {
 
 	for _, noExport := range []bool{true, false} {
 		if _, err := fep.LustreCreateVolume(1<<20, "fs1", "v", "zone_v", "10.0.0.0", "255.255.255.0",
-			"RW", "off", "off", "", noExport); err != nil {
+			"RW", "off", "off", "", noExport, map[bool]string{true: "k8s/ns1"}[noExport]); err != nil {
 			t.Fatalf("create(noExport=%v): %v", noExport, err)
 		}
 	}
@@ -33,5 +33,11 @@ func TestLustreCreateVolumeSendsExportOffForNativeMount(t *testing.T) {
 	}
 	if _, ok := bodies[1]["export"]; ok {
 		t.Fatalf("nfs body has export key: %v", bodies[1])
+	}
+	if bodies[0]["subDir"] != "k8s/ns1" {
+		t.Fatalf("body subDir = %q, want k8s/ns1", bodies[0]["subDir"])
+	}
+	if _, ok := bodies[1]["subDir"]; ok {
+		t.Fatalf("empty subDir sent: %v", bodies[1])
 	}
 }

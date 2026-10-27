@@ -98,6 +98,7 @@ func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*model
 			nfsInsecure,
 			spec.PvcQos,
 			spec.NoExport,
+			spec.SubDir,
 		)
 		if err != nil {
 			log.Errorf("Gluesys FlexA Call(CreateVolume) : Fail Create Lustre Volume(%s)", volName)

@@ -123,6 +123,8 @@ Parameter names are **case-sensitive** (`poolName`, not `poolname`).
 
 **Backend volume name (optional):** `volumeNameFormat` sets the name of the FlexA volume/share (Lustre directory, ZFS dataset). The default is `{pvname}` (`pvc-<uid>`). Placeholders: `{pvname}` (required), `{namespace}`, `{pvcname}`. Use `_` as the separator, for example `{namespace}_{pvname}` gives `gluesys05_pvc-<uid>`; it is valid for both Lustre and ZFS and never appears in a namespace name. Lustre allows `[A-Za-z0-9._-]`; ZFS allows `[A-Za-z0-9_-]` and must start with a letter; at most 128 characters. A name that breaks these rules fails CreateVolume with `InvalidArgument`. StorageClass parameters cannot be changed in place, so recreate the class to change it. Existing volumes keep their names.
 
+**Lustre volume directory:** CSI creates Lustre volumes under `k8s/<namespace>/` in the filesystem, for example `/lustre/agent/<clusterName>/k8s/gluesys05/pvc-<uid>`, so they do not mix with other directories at the filesystem root. The namespace directory stays when its last volume is deleted. Volumes created before this change stay at the filesystem root and keep working. With the namespace already in the path, the default `volumeNameFormat` (`{pvname}`) is usually enough.
+
 **Raw YAML examples:** [`deploy/kubernetes/storage-class-zfs.yml`](deploy/kubernetes/storage-class-zfs.yml), [`deploy/kubernetes/storage-class-lustre.yml`](deploy/kubernetes/storage-class-lustre.yml)
 
 **ZFS example:**
