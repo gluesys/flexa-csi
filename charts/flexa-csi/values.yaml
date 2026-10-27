@@ -99,6 +99,9 @@ node:
   # 띄우고 지켜본다(노드에 이미 떠 있으면 그대로 쓴다).
   nfsLockDaemons: true
   statdStatePath: /var/lib/flexa/statd
+  # 노드에서 동시에 진행하는 Lustre 마운트 수. 여러 개를 함께 마운트하면 Lustre 클라이언트가
+  # 설정 로그를 읽다 EIO 로 실패하는 경우가 있어 제한한다(EIO 는 플러그인이 다시 시도한다).
+  lustreMountConcurrency: 2
 
 # client-info Secret mounted at /etc/flexa/client-info.yml
 clientInfo:

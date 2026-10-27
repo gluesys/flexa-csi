@@ -566,7 +566,7 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	source := lustreMountSource(mgsSpec, clusterName, volumeId, req.VolumeContext["baseDir"])
 
 	log.Infof("NodeStageVolume: mounting Lustre source(%s) on stagingPath(%s)", source, stagingPath)
-	if err := lustreMountViaHost(ctx, source, stagingPath, req.GetVolumeCapability().GetMount().GetMountFlags()); err != nil {
+	if err := lustreMount(ctx, source, stagingPath, req.GetVolumeCapability().GetMount().GetMountFlags()); err != nil {
 		return nil, status.Errorf(codes.Internal, "Lustre mount failed: source=%s target=%s err=%v", source, stagingPath, err)
 	}
 

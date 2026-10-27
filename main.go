@@ -32,11 +32,12 @@ var (
 	tlsKeyPath  = ""
 	listenAddr  = ":8443"
 	// Logging
-	logLevel       = "info"
-	webapiDebug    = false
-	multipathForUC = true
-	nfsLockDaemons = false
-	proxyTimeout   = webapi.DefaultRequestTimeout
+	logLevel               = "info"
+	webapiDebug            = false
+	multipathForUC         = true
+	nfsLockDaemons         = false
+	lustreMountConcurrency = driver.DefaultLustreMountConcurrency
+	proxyTimeout           = webapi.DefaultRequestTimeout
 )
 
 var rootCmd = &cobra.Command{
@@ -103,6 +104,7 @@ func driverStart() error {
 	if nfsLockDaemons {
 		driver.StartNfsLockDaemons()
 	}
+	driver.SetLustreMountConcurrency(lustreMountConcurrency)
 	drv.Activate()
 
 	c := make(chan os.Signal, 1)
@@ -135,6 +137,7 @@ func addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().BoolVarP(&webapiDebug, "debug", "d", webapiDebug, "Enable webapi debugging logs")
 	cmd.PersistentFlags().BoolVar(&multipathForUC, "multipath", multipathForUC, "Set to 'false' to disable multipath for UC")
 	cmd.PersistentFlags().BoolVar(&nfsLockDaemons, "nfs-lock-daemons", nfsLockDaemons, "Start and supervise rpcbind/rpc.statd for NFSv3 locking (node plugin)")
+	cmd.PersistentFlags().IntVar(&lustreMountConcurrency, "lustre-mount-concurrency", lustreMountConcurrency, "Lustre mounts run at the same time on one node (node plugin)")
 	cmd.PersistentFlags().Float32Var(&driver.KubeAPIQPS, "kube-api-qps", driver.KubeAPIQPS, "QPS of the Kubernetes API client (one PVC GET per CreateVolume)")
 	cmd.PersistentFlags().IntVar(&driver.KubeAPIBurst, "kube-api-burst", driver.KubeAPIBurst, "Burst of the Kubernetes API client")
 	cmd.PersistentFlags().DurationVar(&proxyTimeout, "proxy-timeout", proxyTimeout, "Upper bound for one FlexA proxy call; the volume stays locked until the call ends")

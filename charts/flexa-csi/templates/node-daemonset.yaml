@@ -76,6 +76,7 @@ spec:
             - --client-info
             - /etc/flexa/client-info.yml
             - --log-level={{ .Values.logLevel }}
+            - --lustre-mount-concurrency={{ .Values.node.lustreMountConcurrency }}
             {{- if .Values.node.nfsLockDaemons }}
             - --nfs-lock-daemons
             {{- end }}
