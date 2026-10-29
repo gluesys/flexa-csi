@@ -39,3 +39,27 @@ func defaultSecureZone(addr, sub, mountIP string) (string, string, error) {
 	}
 	return ipnet.IP.String(), net.IP(ipnet.Mask).String(), nil
 }
+
+// secureZoneName 은 보안존 이름을 네트워크로 정한다. 같은 네트워크의 볼륨은 보안존 하나를 같이 쓴다.
+// 예: ("172.16.0.0", "255.255.192.0") → "zone_csi_172-16-0-0_18".
+// 기존에는 PVC 마다 zone_<PVC> 를 만들어 같은 대역의 보안존이 볼륨 수만큼 늘었다.
+// provisiond 는 같은 이름·같은 네트워크면 재사용하고, 마지막 공유가 지워질 때 보안존을 지운다.
+func secureZoneName(addr, sub string) string {
+	mask := sanitizeZonePart(sub)
+	if ip := net.ParseIP(strings.TrimSpace(sub)).To4(); ip != nil {
+		if ones, bits := net.IPMask(ip).Size(); bits != 0 {
+			mask = fmt.Sprint(ones)
+		}
+	}
+	return fmt.Sprintf("zone_csi_%s_%s", sanitizeZonePart(addr), mask)
+}
+
+// sanitizeZonePart 는 보안존 이름에 쓸 수 없는 글자('.', ':' 등)를 '-' 로 바꾼다.
+func sanitizeZonePart(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '-'
+	}, strings.TrimSpace(s))
+}

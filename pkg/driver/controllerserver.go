@@ -248,15 +248,8 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	log.Infof("Volume Options : optionSVS(%s), optionISS(%s), optionComp(%s), optionDedup(%s)", optionSVS, optionISS, optionComp, optionDedup)
 
-	zoneOwner := pvcName
-	if zoneOwner == "" {
-		zoneOwner = volName
-	}
-	secureName := fmt.Sprintf("zone_%s", zoneOwner)
 	secureAddr := opt("flexa.io/secureAddress")
 	secureSub := opt("flexa.io/secureSubnet")
-
-	log.Infof("Share Secure Zone : name(%s) Address(%s) Subnet(%s)", secureName, secureAddr, secureSub)
 
 	nfsAccess := opt("flexa.io/nfsAccess")
 	nfsNoRoot := opt("flexa.io/nfsNoRootSquashing")
@@ -290,7 +283,6 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		OptionSVS:   optionSVS,
 		OptionComp:  optionComp,
 		OptionDedup: optionDedup,
-		SecureName:  secureName,
 		SecureAddr:  secureAddr,
 		SecureSub:   secureSub,
 		NfsAccess:   nfsAccess,
@@ -318,6 +310,8 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
+	spec.SecureName = secureZoneName(spec.SecureAddr, spec.SecureSub)
+	log.Infof("Share Secure Zone : name(%s) Address(%s) Subnet(%s)", spec.SecureName, spec.SecureAddr, spec.SecureSub)
 
 	release, err := cs.locks.acquire(volumeID)
 	if err != nil {
