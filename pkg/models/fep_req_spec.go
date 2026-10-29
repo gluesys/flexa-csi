@@ -53,6 +53,9 @@ type K8sVolumeRespSpec struct {
 	Fs         string // Default : zfs , TODO : lustre
 	BaseDir    string // Share Base Directory Path
 	ShareName  string // NFS Share Name
+	// Creating: the backend has records for the volume but its create has not
+	// finished (provisiond status "creating"). Not a usable volume yet.
+	Creating bool
 }
 
 //TODO type K8sSnapshotRespSpec struct {}

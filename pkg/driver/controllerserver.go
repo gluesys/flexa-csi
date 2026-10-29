@@ -326,6 +326,20 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "Failed to look up volume %s: %v", backingName, err)
 	}
+	if k8sVolume != nil && k8sVolume.Creating {
+		// provisiond has records for the volume but its create has not finished
+		// (still running, or left by a provisiond that died). Never report it as
+		// created. Lustre: send the create again; provisiond joins the running
+		// create or rolls back the dead one first, then answers only when the
+		// volume is complete. ZFS creates in two calls (dataset, share) and rolls
+		// the dataset back when the share fails, so wait for the backend instead.
+		if fs != "lustre" {
+			return nil, status.Errorf(codes.Unavailable,
+				"Volume [%s] is still being created on the backend; retry later", backingName)
+		}
+		log.Infof("Volume [%s] is still being created on the backend; sending create again", backingName)
+		k8sVolume = nil
+	}
 	if k8sVolume != nil {
 		// Size 0 means the backend could not report a size (e.g. Lustre quota not
 		// yet visible in Redis); do not treat that as a capacity conflict.

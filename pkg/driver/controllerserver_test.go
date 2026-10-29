@@ -39,15 +39,19 @@ type fakeProxy struct {
 	// does while its monitor snapshot misses the pool.
 	poolGone bool
 	calls    []string
+	// lustre answers like provisiond for cluster "fs1".
+	lustre map[string]*fakeVol
 }
 
 type fakeVol struct {
 	sizeMb int64
 	share  string
+	// creating: provisiond has records but the create has not finished.
+	creating bool
 }
 
 func newFakeProxy(t *testing.T, pools ...string) (*fakeProxy, *common.ProxyInfo) {
-	p := &fakeProxy{pools: map[string]map[string]*fakeVol{}}
+	p := &fakeProxy{pools: map[string]map[string]*fakeVol{}, lustre: map[string]*fakeVol{}}
 	for _, name := range pools {
 		p.pools[name] = map[string]*fakeVol{}
 	}
@@ -77,6 +81,38 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
 	switch {
+	case seg[0] == "lustre" && len(seg) == 3 && seg[1] == "vip":
+		reply(w, 200, map[string]string{"vip": "10.0.0.8"}, "")
+	case seg[0] == "lustre" && len(seg) >= 5 && seg[1] == "cluster" && seg[3] == "volume":
+		name := seg[4]
+		v, exists := p.lustre[name]
+		data := func(v *fakeVol) map[string]interface{} {
+			st := "normal"
+			if v.creating {
+				st = "creating"
+			}
+			return map[string]interface{}{"clusterName": seg[2], "volName": name, "volumeId": name,
+				"path": "/lustre/agent/" + seg[2] + "/" + name, "quotaMb": v.sizeMb,
+				"quota": map[string]int64{"limitMb": v.sizeMb}, "status": st}
+		}
+		switch {
+		case len(seg) == 5 && !exists:
+			reply(w, 404, nil, fmt.Sprintf("Share(%s) does not exist", name))
+		case len(seg) == 5:
+			reply(w, 200, data(v), "")
+		case seg[5] == "create":
+			// provisiond: a create on a volume whose create is unfinished joins or
+			// settles it and answers when the volume is complete.
+			if !exists {
+				mb, _ := strconv.ParseInt(body["sizeValue"], 10, 64)
+				v = &fakeVol{sizeMb: mb}
+				p.lustre[name] = v
+			}
+			v.creating = false
+			reply(w, 200, data(v), "")
+		default:
+			reply(w, 404, nil, "no route")
+		}
 	case len(seg) == 5 && seg[0] == "zfs" && seg[3] == "vip":
 		reply(w, 200, map[string]string{"vip": "10.0.0.9"}, "")
 	case seg[0] == "zfs" && len(seg) >= 4:
@@ -106,6 +142,9 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			data := map[string]interface{}{"poolName": seg[2], "volName": name, "total": v.sizeMb}
+			if v.creating {
+				data["status"] = "creating"
+			}
 			if p.provisiond && v.share != "" {
 				data["sharePath"] = fmt.Sprintf("/%s/%s/%s", seg[2], name, v.share)
 				data["shareName"] = v.share
@@ -488,5 +527,74 @@ func TestProxyForVolumeTakesTokenFromClientInfo(t *testing.T) {
 		if err != nil || p.Host != c.host || p.Token != c.tok {
 			t.Errorf("case %d: proxy=%+v err=%v, want %s/%s", i, p, err, c.host, c.tok)
 		}
+	}
+}
+
+func lustreCreateReq(name string, required int64) *csi.CreateVolumeRequest {
+	return &csi.CreateVolumeRequest{
+		Name:               name,
+		CapacityRange:      &csi.CapacityRange{RequiredBytes: required},
+		VolumeCapabilities: mountCaps(),
+		Parameters: map[string]string{
+			"fs": "lustre", "clusterName": "fs1", "proxyProfile": "zfs", "protocol": "nfs",
+			"flexa.io/secureAddress": "10.0.0.0", "flexa.io/secureSubnet": "255.0.0.0",
+		},
+	}
+}
+
+func countCalls(p *fakeProxy, call string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, c := range p.calls {
+		if c == call {
+			n++
+		}
+	}
+	return n
+}
+
+// A volume whose backend create has not finished (provisiond status
+// "creating": records exist before the directory and quota) is never reported
+// as created from the lookup alone.
+func TestCreateVolumeDoesNotTrustAnUnfinishedCreate(t *testing.T) {
+	proxy, info := newFakeProxy(t, "pool1")
+	cs, _ := newTestController(t, info)
+	ctx := context.Background()
+
+	// Lustre: the create is sent again, so provisiond joins or settles it.
+	proxy.lustre["pvc-l"] = &fakeVol{sizeMb: 2048, creating: true}
+	resp, err := cs.CreateVolume(ctx, lustreCreateReq("pvc-l", 2*utils.UNIT_GB))
+	if err != nil {
+		t.Fatalf("lustre create over an unfinished one: %v", err)
+	}
+	if got := countCalls(proxy, "POST /lustre/cluster/fs1/volume/pvc-l/create"); got != 1 {
+		t.Fatalf("lustre create POSTs = %d, want 1", got)
+	}
+	if resp.GetVolume().GetCapacityBytes() != 2*utils.UNIT_GB || proxy.lustre["pvc-l"].creating {
+		t.Fatalf("lustre volume not completed: %+v", resp.GetVolume())
+	}
+	// A finished volume is answered from the lookup without another create.
+	if _, err := cs.CreateVolume(ctx, lustreCreateReq("pvc-l", 2*utils.UNIT_GB)); err != nil {
+		t.Fatalf("repeat lustre create: %v", err)
+	}
+	if got := countCalls(proxy, "POST /lustre/cluster/fs1/volume/pvc-l/create"); got != 1 {
+		t.Fatalf("lustre create POSTs after a finished create = %d, want 1", got)
+	}
+
+	// ZFS: wait (Unavailable) and touch nothing; the external-provisioner retries.
+	proxy.provisiond = true
+	proxy.pools["pool1"]["pvc-z"] = &fakeVol{sizeMb: 1024, share: "pvc-z", creating: true}
+	if _, err := cs.CreateVolume(ctx, createReq("pvc-z", utils.UNIT_GB)); status.Code(err) != codes.Unavailable {
+		t.Fatalf("zfs create over an unfinished one = %v, want Unavailable", err)
+	}
+	for _, c := range proxy.calls {
+		if strings.HasPrefix(c, "POST ") && strings.Contains(c, "pvc-z") {
+			t.Fatalf("zfs unfinished create sent %q", c)
+		}
+	}
+	proxy.pools["pool1"]["pvc-z"].creating = false
+	if _, err := cs.CreateVolume(ctx, createReq("pvc-z", utils.UNIT_GB)); err != nil {
+		t.Fatalf("zfs create after the backend finished: %v", err)
 	}
 }

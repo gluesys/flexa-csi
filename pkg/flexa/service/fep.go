@@ -397,6 +397,7 @@ func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName 
 			Size:       sizeBytes,
 			Fs:         "lustre",
 			BaseDir:    info.Path,
+			Creating:   info.Status == "creating",
 		}, nil
 	}
 
@@ -445,6 +446,7 @@ func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName 
 			Fs:        "zfs",
 			BaseDir:   volInfo.BaseDir,
 			ShareName: volInfo.ShareName,
+			Creating:  volInfo.Status == "creating",
 		}
 
 		log.Infof("Gluesys FlexA Call(GetVolume) : Success Volume(%s)", volName)
