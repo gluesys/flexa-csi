@@ -25,7 +25,7 @@ func fakeProvisiond(t *testing.T, replies map[string]string) (*FEP, func() []cal
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		var body map[string]interface{}
-		json.Unmarshal(raw, &body)
+		_ = json.Unmarshal(raw, &body)
 		mu.Lock()
 		calls = append(calls, call{r.URL.Path, body})
 		mu.Unlock()
@@ -36,7 +36,7 @@ func fakeProvisiond(t *testing.T, replies map[string]string) (*FEP, func() []cal
 		code, text, _ := strings.Cut(reply, " ")
 		status, _ := strconv.Atoi(code)
 		w.WriteHeader(status)
-		w.Write([]byte(text))
+		_, _ = w.Write([]byte(text))
 	}))
 	t.Cleanup(srv.Close)
 	host, portStr, _ := net.SplitHostPort(srv.Listener.Addr().String())

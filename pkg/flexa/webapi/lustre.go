@@ -231,7 +231,7 @@ func (fep *FEP) lustrePost(cgiPath string, body map[string]string) (LustreVolume
 	if err != nil {
 		return LustreVolumeCreateResponse{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {

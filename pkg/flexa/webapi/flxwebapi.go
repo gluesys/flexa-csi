@@ -121,7 +121,7 @@ func (fep *FEP) do(req *http.Request, apiTemplate interface{}, cgiPath string) (
 	if err != nil {
 		return Response{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// For debug print text body
 	var bodyText []byte

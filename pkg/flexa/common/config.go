@@ -141,7 +141,7 @@ func LoadClientInfoConfig(configPath string) (*ClientInfoConfig, error) {
 		log.Errorf("Unable to open config file: %v", err)
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return LoadClientInfoConfigFromReader(f)
 }
 

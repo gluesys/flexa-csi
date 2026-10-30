@@ -144,25 +144,25 @@ func (ns *NodeServer) saveNfsVolMeta(volId string, targetPath string, stagingGro
 		return err
 	}
 	if _, err := tmp.Write(jsonData); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
+		_ = os.Remove(tmp.Name())
 		return err
 	}
 	if err := os.Chmod(tmp.Name(), 0644); err != nil {
-		os.Remove(tmp.Name())
+		_ = os.Remove(tmp.Name())
 		return err
 	}
 	if err := os.Rename(tmp.Name(), metaFile); err != nil {
-		os.Remove(tmp.Name())
+		_ = os.Remove(tmp.Name())
 		return err
 	}
 	return nil
@@ -231,7 +231,7 @@ func (ns *NodeServer) otherGroupUsers(volId string, targetPath string, groupPath
 		if m.TargetPath == targetPath || m.StagingGroupPath != groupPath {
 			continue
 		}
-		mounted, err := ns.Mounter.Interface.IsMountPoint(m.TargetPath)
+		mounted, err := ns.Mounter.IsMountPoint(m.TargetPath)
 		if err != nil && !os.IsNotExist(err) {
 			// A broken mount is still a user until its own unpublish runs.
 			mounted = true
@@ -341,7 +341,7 @@ func (ns *NodeServer) getNfsGroupPath(volumeId string, options []string) string 
 // mount is already there; a broken (stale NFS, disconnected Lustre) mount is
 // taken down first so the caller mounts it afresh.
 func (ns *NodeServer) prepareMountPoint(path string) (bool, error) {
-	mounted, err := ns.Mounter.Interface.IsMountPoint(path)
+	mounted, err := ns.Mounter.IsMountPoint(path)
 	switch {
 	case err == nil:
 		return mounted, nil
@@ -349,7 +349,7 @@ func (ns *NodeServer) prepareMountPoint(path string) (bool, error) {
 		return false, os.MkdirAll(path, 0750)
 	case mount.IsCorruptedMnt(err):
 		log.Warnf("NodeServer : %s is a broken mount (%v); unmounting it", path, err)
-		if uerr := ns.Mounter.Interface.Unmount(path); uerr != nil {
+		if uerr := ns.Mounter.Unmount(path); uerr != nil {
 			return false, fmt.Errorf("unmount broken mount %s: %w", path, uerr)
 		}
 		return false, nil
@@ -362,7 +362,7 @@ func (ns *NodeServer) mountIsReadOnly(path string) bool {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved
 	}
-	mps, err := ns.Mounter.Interface.List()
+	mps, err := ns.Mounter.List()
 	if err != nil {
 		return false
 	}
@@ -388,7 +388,7 @@ func (ns *NodeServer) publishBind(source string, target string, readonly bool) e
 			return nil
 		}
 		log.Warnf("NodeServer : %s is mounted read-write but must be read-only; remounting", target)
-		if err := ns.Mounter.Interface.Unmount(target); err != nil {
+		if err := ns.Mounter.Unmount(target); err != nil {
 			return status.Errorf(codes.Internal, "failed to unmount %s: %v", target, err)
 		}
 	}
@@ -399,11 +399,11 @@ func (ns *NodeServer) publishBind(source string, target string, readonly bool) e
 	if readonly {
 		opts = append(opts, "ro")
 	}
-	if err := ns.Mounter.Interface.Mount(source, target, "", opts); err != nil {
+	if err := ns.Mounter.Mount(source, target, "", opts); err != nil {
 		// The bind may have succeeded and only the remount failed; leaving it
 		// would hand a writable mount to the next retry.
-		if m, _ := ns.Mounter.Interface.IsMountPoint(target); m {
-			if uerr := ns.Mounter.Interface.Unmount(target); uerr != nil {
+		if m, _ := ns.Mounter.IsMountPoint(target); m {
+			if uerr := ns.Mounter.Unmount(target); uerr != nil {
 				log.Errorf("NodeServer : failed to undo bind on %s: %v", target, uerr)
 			}
 		}
@@ -472,7 +472,7 @@ var lustreUmount = lustreUmountViaHost
 // wait for unstage when attachRequired is false) fails stat with ENOENT while it
 // is still mounted, so stat alone would leak the mount.
 func (ns *NodeServer) listedMount(path string) bool {
-	mps, err := ns.Mounter.Interface.List()
+	mps, err := ns.Mounter.List()
 	if err != nil {
 		return false
 	}
@@ -532,7 +532,7 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	}
 	defer release()
 
-	mounted, err := ns.Mounter.Interface.IsMountPoint(stagingPath)
+	mounted, err := ns.Mounter.IsMountPoint(stagingPath)
 	switch {
 	case err == nil:
 	case os.IsNotExist(err):
@@ -692,7 +692,7 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	// bound to (an older layout, or other options at the time); recording a new
 	// group here would leave the real one behind at unpublish.
 	if meta, err := ns.loadNfsVolMeta(volumeId, targetPath); err == nil && meta.StagingGroupPath != "" {
-		if mounted, err := ns.Mounter.Interface.IsMountPoint(targetPath); err == nil && mounted {
+		if mounted, err := ns.Mounter.IsMountPoint(targetPath); err == nil && mounted {
 			if err := ns.publishBind(meta.StagingGroupPath, targetPath, readonly); err != nil {
 				return nil, err
 			}
