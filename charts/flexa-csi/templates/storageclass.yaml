@@ -21,6 +21,9 @@ parameters:
   {{- fail (printf "values.storageClass.%s: set poolName (ZFS) or clusterName (Lustre)" $key) }}
 {{- end }}
   protocol: {{ $sc.protocol | quote }}
+{{- with $sc.mountNetwork }}
+  mountNetwork: {{ . | quote }}
+{{- end }}
 {{- with $sc.volumeNameFormat }}
   volumeNameFormat: {{ . | quote }}
 {{- end }}

@@ -163,6 +163,19 @@ func (service *FlexAService) createZfsShare(spec *models.CreateVolumeSpec) (stri
 	return baseDir, nil
 }
 
+// ResolveVip returns the server address the backend gives for the proxy's
+// mount reference (mountIP, else proxy IP).
+func (service *FlexAService) ResolveVip(fs, poolName string) (string, error) {
+	ref := service.fep.VipResolveRefIP()
+	if ref == "" {
+		return "", fmt.Errorf("VIP resolve reference is empty; check client-info host")
+	}
+	if fs == "lustre" {
+		return service.fep.ResolveLustreVip(ref)
+	}
+	return service.fep.ResolveZfsVip(poolName, ref)
+}
+
 func (service *FlexAService) volumeResponse(spec *models.CreateVolumeSpec, baseDir string, refForVip string) (*models.K8sVolumeRespSpec, error) {
 	volId, volName, poolName := spec.VolumeId, spec.VolumeName, spec.PoolName
 	if volName == "test-vol" {

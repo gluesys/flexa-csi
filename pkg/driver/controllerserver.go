@@ -306,6 +306,9 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
+	if proxy, err = proxyForClass(proxy, params); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
 	spec.SecureAddr, spec.SecureSub, err = defaultSecureZone(secureAddr, secureSub, proxy.MountIP)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
@@ -321,6 +324,17 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	reqService := service.NewFlexAService()
 	reqService.SetFep(proxy)
+
+	// Check the server address before anything is created on the backend.
+	if strings.TrimSpace(params[paramMountNetwork]) != "" {
+		vip, err := reqService.ResolveVip(fs, poolOrCluster)
+		if err != nil {
+			return nil, status.Errorf(codes.Unavailable, "Failed to resolve server address for %s: %v", backingName, err)
+		}
+		if err := checkMountNetwork(params, vip); err != nil {
+			return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
+		}
+	}
 
 	k8sVolume, err := reqService.GetVolume(fs, poolOrCluster, backingName)
 	if err != nil {

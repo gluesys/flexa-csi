@@ -137,6 +137,10 @@ clientInfo:
 #   Placeholders {pvname} (required), {namespace}, {pvcname}. Use "_" as separator: "{namespace}_{pvname}".
 #   Lustre allows [A-Za-z0-9._-], ZFS allows [A-Za-z0-9_-] and must start with a letter; max 128.
 #   StorageClass parameters are immutable: changing it needs the StorageClass recreated.
+# mountNetwork (optional): IP or CIDR of the network nodes mount this class over, e.g.
+#   "198.51.100.0/24" to put NFS on an IB data network. Replaces the profile mountIP for
+#   this class (server address and default NFS secure zone). A single IP means its /24.
+#   Creating fails when the storage has no address in this network.
 storageClass:
   zfs_poolA:
     enabled: false

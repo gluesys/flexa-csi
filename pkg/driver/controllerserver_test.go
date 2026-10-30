@@ -598,3 +598,30 @@ func TestCreateVolumeDoesNotTrustAnUnfinishedCreate(t *testing.T) {
 		t.Fatalf("zfs create after the backend finished: %v", err)
 	}
 }
+
+// mountNetwork: the server address must be in that network, checked before the
+// backend creates anything; the volume context carries the network as mountIP.
+func TestCreateVolumeMountNetwork(t *testing.T) {
+	proxy, info := newFakeProxy(t, "pool1") // the fake resolves Lustre VIPs to 10.0.0.8
+	cs, _ := newTestController(t, info)
+	ctx := context.Background()
+
+	req := lustreCreateReq("pvc-in", 2*utils.UNIT_GB)
+	req.Parameters[paramMountNetwork] = "10.0.0.0/24"
+	resp, err := cs.CreateVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("create in mountNetwork: %v", err)
+	}
+	if got := resp.GetVolume().GetVolumeContext(); got["vip"] != "10.0.0.8" || got[volAttrMountIP] != "10.0.0.0/24" {
+		t.Fatalf("volume context = %v", got)
+	}
+
+	req = lustreCreateReq("pvc-out", 2*utils.UNIT_GB)
+	req.Parameters[paramMountNetwork] = "198.51.100.0/24"
+	if _, err = cs.CreateVolume(ctx, req); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("create outside mountNetwork: err = %v, want FailedPrecondition", err)
+	}
+	if got := countCalls(proxy, "POST /lustre/cluster/fs1/volume/pvc-out/create"); got != 0 {
+		t.Fatalf("create POSTs outside mountNetwork = %d, want 0", got)
+	}
+}

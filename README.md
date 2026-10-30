@@ -170,6 +170,7 @@ allowVolumeExpansion: true
 | *clusterName* | For `fs=lustre` | Lustre cluster name. |
 | *protocol* | Typically set | e.g. `nfs`. |
 | *proxyProfile* | Optional | Profile name under `profiles` in `client-info`. When set, the driver uses that profile’s `proxyIP`, `proxyPort`, and `mountIP`. |
+| *mountNetwork* | Optional | IP or CIDR of the network nodes mount this class over (e.g. `198.51.100.0/24` for an IB data network). Replaces the profile `mountIP` for this class: the server address (`vip`) is resolved in this network and the default NFS secure zone is this network. A single IP means its /24; give a CIDR for wider networks. Creating fails when the storage has no address in this network. |
 | *flexa.io/&lt;option&gt;* | Optional | Default for a [PVC annotation](#pvc-annotations) with the same name, e.g. `flexa.io/optionComp: "on"`. Used only when the PVC does not set that annotation. With Helm, set `storageClass.<key>.volumeDefaults` (keys without the `flexa.io/` prefix). |
 
 Volume expansion is **expand-only**. Shrink (reducing requested size) is not supported.
