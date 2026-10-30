@@ -23,7 +23,7 @@ Volume snapshots and restore from a snapshot are supported for ZFS volumes (see 
 
 - Kubernetes 1.21 or above
 - Gluesys FlexA storage (**FlexStor**, **ExaStor**) **1.4.2 or above**, with at least one storage pool for ZFS-backed volumes, or Lustre cluster configuration as required by your deployment
-- Go 1.21+ recommended when building from source
+- Go toolchain go1.26.10 or above when building from source (go.mod pins it; with `GOTOOLCHAIN=local` install go1.26.10+ yourself, with `auto` proxy.golang.org access is required)
 
 ### Before you install
 
