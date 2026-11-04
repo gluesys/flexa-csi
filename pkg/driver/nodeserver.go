@@ -435,11 +435,9 @@ func (ns *NodeServer) mountNfsGroup(source string, stagingGroupPath string, opti
 		return status.Error(codes.Internal, err.Error())
 	}
 
-	// The export root belongs to the server: with root_squash or a read-only
-	// mount the chmod is refused, and the mount is usable all the same.
-	if err := chmodIfPermissionMismatch(stagingGroupPath, os.FileMode(0750)); err != nil {
-		log.Warnf("mountNfsGroup : chmod %s: %v", stagingGroupPath, err)
-	}
+	// The export root belongs to the server, which sets its mode when it
+	// creates the share. Changing it here (with no_root_squash the chmod
+	// succeeds) would cut off pods on other nodes already using it.
 
 	log.Infof("NFS Group Mount %s on %s succeeded", source, stagingGroupPath)
 
