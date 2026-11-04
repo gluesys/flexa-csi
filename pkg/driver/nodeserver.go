@@ -28,6 +28,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	log "github.com/sirupsen/logrus"
@@ -375,16 +376,43 @@ func (ns *NodeServer) mountIsReadOnly(path string) bool {
 	return ro
 }
 
+// sameDir reports whether a and b are the same directory (a bind mount of a
+// shows a's device and inode at b). A variable so tests with a fake mounter,
+// which binds nothing, can compare the recorded mount source instead.
+var sameDir = func(a, b string) (bool, error) {
+	var sa, sb syscall.Stat_t
+	if err := syscall.Stat(a, &sa); err != nil {
+		return false, err
+	}
+	if err := syscall.Stat(b, &sb); err != nil {
+		return false, err
+	}
+	return sa.Dev == sb.Dev && sa.Ino == sb.Ino, nil
+}
+
 // publishBind binds source onto target, read-only when asked. An existing
-// target mount counts as done only if its access matches: a writable bind left
-// by a failed earlier attempt is redone so a read-only publish never ends up rw.
+// target mount counts as done only if it shows source and its access matches.
+// Another source or a read-only mount where read-write is asked is a different
+// publish (AlreadyExists, as the CSI spec says). A writable bind left by a
+// failed earlier attempt is redone so a read-only publish never ends up rw.
 func (ns *NodeServer) publishBind(source string, target string, readonly bool) error {
 	mounted, err := ns.prepareMountPoint(target)
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to prepare target path %s: %v", target, err)
 	}
 	if mounted {
-		if !readonly || ns.mountIsReadOnly(target) {
+		same, err := sameDir(source, target)
+		if err != nil {
+			return status.Errorf(codes.Internal, "failed to compare %s with the mount on %s: %v", source, target, err)
+		}
+		if !same {
+			return status.Errorf(codes.AlreadyExists, "%s is already mounted from another source than %s", target, source)
+		}
+		mountedRO := ns.mountIsReadOnly(target)
+		if !readonly && mountedRO {
+			return status.Errorf(codes.AlreadyExists, "%s is already mounted read-only; read-write was asked", target)
+		}
+		if !readonly || mountedRO {
 			return nil
 		}
 		log.Warnf("NodeServer : %s is mounted read-write but must be read-only; remounting", target)

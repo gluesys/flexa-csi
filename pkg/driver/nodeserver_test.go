@@ -37,13 +37,34 @@ func newTestNodeServer(t *testing.T, mounter mount.Interface, objs ...runtime.Ob
 	t.Helper()
 	root := t.TempDir()
 	d := &Driver{K8sClient: fake.NewSimpleClientset(objs...)}
-	return &NodeServer{
+	ns := &NodeServer{
 		Driver:    d,
 		Mounter:   &mount.SafeFormatAndMount{Interface: mounter},
 		locks:     newVolumeLocks(),
 		metaRoot:  filepath.Join(root, "meta"),
 		groupRoot: filepath.Join(root, "group"),
-	}, root
+	}
+	// The fake mounter binds nothing: compare the source it recorded. Like a
+	// real bind, a bind of a mount point records that mount's device.
+	orig := sameDir
+	sameDir = func(src, target string) (bool, error) {
+		mps, err := ns.Mounter.List()
+		if err != nil {
+			return false, err
+		}
+		dev, found, want := "", false, src
+		for _, mp := range mps {
+			if mp.Path == target {
+				dev, found = mp.Device, true
+			}
+			if mp.Path == src {
+				want = mp.Device
+			}
+		}
+		return found && dev == want, nil
+	}
+	t.Cleanup(func() { sameDir = orig })
+	return ns, root
 }
 
 func nfsPod(name string, annotations map[string]string) *corev1.Pod {
@@ -197,7 +218,7 @@ func TestReadOnlyPublishRedoesWritableLeftover(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A rw bind from an earlier, half-finished attempt.
-	if err := fm.Mount("/somewhere", target, "", []string{"bind"}); err != nil {
+	if err := fm.Mount("/src", target, "", []string{"bind"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := ns.publishBind("/src", target, true); err != nil {
@@ -205,6 +226,40 @@ func TestReadOnlyPublishRedoesWritableLeftover(t *testing.T) {
 	}
 	if !ns.mountIsReadOnly(target) {
 		t.Fatal("leftover rw bind was accepted as a read-only publish")
+	}
+}
+
+// A target already mounted from another source, or read-only where read-write
+// is asked, is a different publish: AlreadyExists, and the mount is left alone.
+func TestPublishRejectsIncompatibleExistingTarget(t *testing.T) {
+	fm := mount.NewFakeMounter(nil)
+	ns, root := newTestNodeServer(t, fm, nfsPod("a", nil))
+	other := filepath.Join(root, "other")
+	ro := filepath.Join(root, "ro")
+	for _, p := range []string{other, ro} {
+		if err := os.MkdirAll(p, 0750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fm.Mount("/elsewhere", other, "", []string{"bind"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fm.Mount("/src", ro, "", []string{"bind", "ro"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ns.publishBind("/src", other, false); status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("publish over another source = %v, want AlreadyExists", err)
+	}
+	if err := ns.publishBind("/src", ro, false); status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("read-write publish over a read-only mount = %v, want AlreadyExists", err)
+	}
+	// The same source and access is already done.
+	if err := ns.publishBind("/src", ro, true); err != nil {
+		t.Fatalf("repeat read-only publish: %v", err)
+	}
+	if mp, ok := mountedAt(fm, other); !ok || mp.Device != "/elsewhere" {
+		t.Fatalf("existing mount on %s was changed: %+v", other, mp)
 	}
 }
 
