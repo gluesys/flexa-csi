@@ -83,6 +83,8 @@ spec:
           env:
             - name: CSI_ENDPOINT
               value: unix://csi/csi.sock
+            - name: CLIENT_INFO_SECRET_NAME
+              value: {{ .Values.clientInfo.secretName | quote }}
             - name: KUBE_NODE_NAME
               valueFrom:
                 fieldRef:

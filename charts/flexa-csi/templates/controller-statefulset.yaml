@@ -130,6 +130,8 @@ spec:
           env:
             - name: CSI_ENDPOINT
               value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock
+            - name: CLIENT_INFO_SECRET_NAME
+              value: {{ .Values.clientInfo.secretName | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: healthz

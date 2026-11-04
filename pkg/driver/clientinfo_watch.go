@@ -18,9 +18,20 @@ import (
 )
 
 const (
-	clientInfoSecretName = "client-info-secret"
-	clientInfoFileKey    = "client-info.yml"
+	defaultClientInfoSecretName = "client-info-secret"
+	clientInfoFileKey           = "client-info.yml"
+	// clientInfoSecretEnv names the Secret the chart mounts (clientInfo.secretName).
+	clientInfoSecretEnv = "CLIENT_INFO_SECRET_NAME"
 )
+
+// clientInfoSecretName is the Secret to watch: the one the chart mounts, so a
+// changed clientInfo.secretName is still reloaded.
+func clientInfoSecretName() string {
+	if n := strings.TrimSpace(os.Getenv(clientInfoSecretEnv)); n != "" {
+		return n
+	}
+	return defaultClientInfoSecretName
+}
 
 func readPodNamespace() (string, error) {
 	b, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
@@ -44,9 +55,10 @@ func (d *Driver) StartClientInfoSecretWatch() {
 		log.Warnf("ClientInfo watch disabled: failed to read pod namespace: %v", err)
 		return
 	}
+	secretName := clientInfoSecretName()
 
 	tweak := func(opts *metav1.ListOptions) {
-		opts.FieldSelector = fields.OneTermEqualSelector("metadata.name", clientInfoSecretName).String()
+		opts.FieldSelector = fields.OneTermEqualSelector("metadata.name", secretName).String()
 	}
 
 	factory := informers.NewSharedInformerFactoryWithOptions(
@@ -58,12 +70,12 @@ func (d *Driver) StartClientInfoSecretWatch() {
 	inf := factory.Core().V1().Secrets().Informer()
 
 	apply := func(sec *v1.Secret) {
-		if sec == nil || sec.Name != clientInfoSecretName {
+		if sec == nil || sec.Name != secretName {
 			return
 		}
 		raw, ok := sec.Data[clientInfoFileKey]
 		if !ok || len(raw) == 0 {
-			log.Warnf("ClientInfo secret %s/%s has no key %q", ns, clientInfoSecretName, clientInfoFileKey)
+			log.Warnf("ClientInfo secret %s/%s has no key %q", ns, secretName, clientInfoFileKey)
 			return
 		}
 		cfg, err := common.LoadClientInfoConfigFromReader(strings.NewReader(string(raw)))
@@ -96,10 +108,10 @@ func (d *Driver) StartClientInfoSecretWatch() {
 			return
 		}
 		// Try an initial get in case Add event was missed.
-		sec, err := d.K8sClient.CoreV1().Secrets(ns).Get(context.Background(), clientInfoSecretName, metav1.GetOptions{})
+		sec, err := d.K8sClient.CoreV1().Secrets(ns).Get(context.Background(), secretName, metav1.GetOptions{})
 		if err == nil {
 			apply(sec)
 		}
-		log.Infof("ClientInfo secret watch started: %s/%s", ns, clientInfoSecretName)
+		log.Infof("ClientInfo secret watch started: %s/%s", ns, secretName)
 	}()
 }
