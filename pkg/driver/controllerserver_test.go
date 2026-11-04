@@ -765,3 +765,31 @@ func TestLustreGetVolumeReportsUsage(t *testing.T) {
 		t.Fatalf("size/used/free = %d/%d/%d", v.Size, v.Used, v.Free)
 	}
 }
+
+// OpenStack volumes on the same pool (cdr- Cinder, mnl- Manila) are not CSI
+// volumes: ListVolumes leaves them out and DeleteVolume never looks for them.
+func TestListVolumesLeavesOutOpenStackVolumes(t *testing.T) {
+	proxy, info := newFakeProxy(t, "pool1")
+	proxy.provisiond = true
+	cs, _ := newTestController(t, info)
+	for _, n := range []string{"pvc-1", "cdr-1", "mnl-1"} {
+		proxy.pools["pool1"][n] = &fakeVol{sizeMb: 1024, share: n}
+	}
+	resp, err := cs.ListVolumes(context.Background(), &csi.ListVolumesRequest{})
+	if err != nil {
+		t.Fatalf("ListVolumes: %v", err)
+	}
+	var got []string
+	for _, e := range resp.GetEntries() {
+		got = append(got, e.GetVolume().GetVolumeId())
+	}
+	if len(got) != 1 || got[0] != "pvc-1" {
+		t.Fatalf("ListVolumes = %v, want [pvc-1]", got)
+	}
+	if _, err := cs.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: "cdr-1"}); err != nil {
+		t.Fatalf("DeleteVolume cdr-1: %v", err)
+	}
+	if proxy.pools["pool1"]["cdr-1"] == nil {
+		t.Fatal("DeleteVolume without PV removed an OpenStack volume")
+	}
+}

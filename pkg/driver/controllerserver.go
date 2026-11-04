@@ -492,6 +492,9 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 // backend it could not list, or a name held by more than one, is an error so
 // that the volume is neither forgotten nor deleted in the wrong place.
 func (cs *ControllerServer) findBackendVolume(volumeId string) (map[string]string, bool, error) {
+	if isOpenStackVolume(volumeId) {
+		return nil, false, nil
+	}
 	var hits []map[string]string
 	for _, prof := range capacityProfiles(cs.Driver.GetClientInfoConfig()) {
 		svc, err := cs.capacityService(prof.name)
@@ -657,6 +660,21 @@ func (cs *ControllerServer) capacityService(profile string) (*service.FlexAServi
 	return svc, nil
 }
 
+// openStackPrefixes name the volumes OpenStack owns on the same pools
+// (provisiond owned.RESERVED: cdr- Cinder, mnl- Manila). provisiond refuses
+// CSI changes to them, so they are not CSI volumes.
+var openStackPrefixes = []string{"cdr-", "mnl-"}
+
+// isOpenStackVolume reports a backend volume that belongs to OpenStack.
+func isOpenStackVolume(name string) bool {
+	for _, p := range openStackPrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // listedVolume identifies one backend volume for ListVolumes. Sorting on
 // (profile, container, volumeId) keeps the offset token stable between calls.
 type listedVolume struct {
@@ -720,6 +738,9 @@ func (cs *ControllerServer) ListVolumes(ctx context.Context, req *csi.ListVolume
 				continue
 			}
 			for _, v := range vols {
+				if isOpenStackVolume(v) {
+					continue
+				}
 				all = append(all, listedVolume{profile: prof.name, fs: prof.fs, container: c, volumeId: v})
 			}
 		}
