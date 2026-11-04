@@ -526,7 +526,8 @@ func (ns *NodeServer) resolveProxyFEP(volCtx map[string]string) (*webapi.FEP, er
 	if err != nil {
 		return nil, err
 	}
-	return &webapi.FEP{Ip: proxy.Host, Port: proxy.Port, MountIP: proxy.MountIP, Token: proxy.Token}, nil
+	return &webapi.FEP{Ip: proxy.Host, Port: proxy.Port, MountIP: proxy.MountIP, Token: proxy.Token,
+		Scheme: proxy.Scheme, CA: proxy.CA}, nil
 }
 
 func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {

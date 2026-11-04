@@ -28,3 +28,19 @@ func TestProxyForVolumeTakesSchemeAndCAFromClientInfo(t *testing.T) {
 		t.Fatalf("unknown address got settings: %+v", p)
 	}
 }
+
+// The node fetches the MGS NID list for a Lustre mount with its own FEP; it
+// must use the same scheme and CA as the controller.
+func TestNodeProxyFEPCarriesSchemeAndCA(t *testing.T) {
+	d := &Driver{}
+	d.SetClientInfoConfig(&common.ClientInfoConfig{Profiles: map[string]common.ProxyInfo{
+		"lustre": {Host: "10.0.0.3", Port: 9001, Token: "tok", Scheme: "https", CA: "PEM"},
+	}})
+	fep, err := (&NodeServer{Driver: d}).resolveProxyFEP(map[string]string{volAttrProxyIP: "10.0.0.3", volAttrProxyPort: "9001", volAttrProxyProfile: "lustre"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fep.Scheme != "https" || fep.CA != "PEM" || fep.Token != "tok" {
+		t.Fatalf("node FEP = %+v", fep)
+	}
+}
