@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -128,6 +129,17 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case len(seg) == 5 && seg[0] == "zfs" && seg[3] == "vip":
 		reply(w, 200, map[string]string{"vip": "10.0.0.9"}, "")
+	case len(seg) == 3 && seg[0] == "zfs" && seg[1] == "pool" && seg[2] == "list":
+		if p.poolGone {
+			reply(w, 500, nil, "pool list failed")
+			return
+		}
+		names := []string{}
+		for n := range p.pools {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		reply(w, 200, map[string]interface{}{"poolList": names}, "")
 	case seg[0] == "zfs" && len(seg) >= 4:
 		pool, ok := p.pools[seg[2]]
 		if !ok || p.poolGone {
@@ -500,6 +512,46 @@ func TestDeleteVolumeKeepsRetryingWhilePoolIsMissing(t *testing.T) {
 	}
 	if _, ok := proxy.pools["pool1"]["pvc-1"]; ok {
 		t.Fatal("volume left behind")
+	}
+}
+
+// The provisioner calls DeleteVolume to clean up a created volume whose PV it
+// could not save: with no PV the volume is looked up on the backends.
+func TestDeleteVolumeWithoutPVFindsTheBackendVolume(t *testing.T) {
+	for _, provisiond := range []bool{false, true} {
+		proxy, info := newFakeProxy(t, "pool1", "pool2")
+		proxy.provisiond = provisiond
+		cs, _ := newTestController(t, info)
+		ctx := context.Background()
+
+		proxy.pools["pool2"]["pvc-1"] = &fakeVol{sizeMb: 1024, share: "pvc-1"}
+		if _, err := cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: "pvc-1"}); err != nil {
+			t.Fatalf("provisiond=%t: delete without PV: %v", provisiond, err)
+		}
+		if _, ok := proxy.pools["pool2"]["pvc-1"]; ok {
+			t.Fatalf("provisiond=%t: volume without PV left on the backend", provisiond)
+		}
+		// Gone everywhere: success.
+		if _, err := cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: "pvc-1"}); err != nil {
+			t.Fatalf("provisiond=%t: delete of a volume gone everywhere: %v", provisiond, err)
+		}
+
+		// A backend that cannot be listed may hold it: retry, never success.
+		proxy.pools["pool1"]["pvc-2"] = &fakeVol{sizeMb: 1024, share: "pvc-2"}
+		proxy.poolGone = true
+		if _, err := cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: "pvc-2"}); status.Code(err) != codes.Unavailable {
+			t.Fatalf("provisiond=%t: delete without PV while pools cannot be listed = %v, want Unavailable", provisiond, err)
+		}
+		proxy.poolGone = false
+
+		// The same name in two pools: delete neither.
+		proxy.pools["pool2"]["pvc-2"] = &fakeVol{sizeMb: 1024, share: "pvc-2"}
+		if _, err := cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: "pvc-2"}); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("provisiond=%t: ambiguous delete = %v, want FailedPrecondition", provisiond, err)
+		}
+		if proxy.pools["pool1"]["pvc-2"] == nil || proxy.pools["pool2"]["pvc-2"] == nil {
+			t.Fatalf("provisiond=%t: ambiguous delete removed a volume", provisiond)
+		}
 	}
 }
 

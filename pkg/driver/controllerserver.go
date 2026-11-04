@@ -21,6 +21,7 @@ import (
 	"fmt"
 	//"sort"
 	//"strconv"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -436,8 +437,15 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return nil, err
 	}
 	if !found {
-		// No PV carries this handle: nothing tells us where the volume lives.
-		return &csi.DeleteVolumeResponse{}, nil
+		// No PV carries this handle. The provisioner also calls DeleteVolume to
+		// clean up a volume whose PV it could not save, so look for the volume on
+		// the backends instead of assuming it is gone.
+		if attrs, found, err = cs.findBackendVolume(volumeId); err != nil {
+			return nil, err
+		}
+		if !found {
+			return &csi.DeleteVolumeResponse{}, nil
+		}
 	}
 
 	release, err := cs.locks.acquire(volumeId)
@@ -476,6 +484,62 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	}
 
 	return &csi.DeleteVolumeResponse{}, nil
+}
+
+// findBackendVolume looks for volumeId in every pool and cluster the
+// client-info profiles reach, for a volume that has no PV. It answers
+// found=false only when every backend was listed and none holds the volume; a
+// backend it could not list, or a name held by more than one, is an error so
+// that the volume is neither forgotten nor deleted in the wrong place.
+func (cs *ControllerServer) findBackendVolume(volumeId string) (map[string]string, bool, error) {
+	var hits []map[string]string
+	for _, prof := range capacityProfiles(cs.Driver.GetClientInfoConfig()) {
+		svc, err := cs.capacityService(prof.name)
+		if err != nil {
+			return nil, false, status.Errorf(codes.Unavailable, "volume %s has no PV and profile %q is unusable: %v", volumeId, prof.name, err)
+		}
+		listContainers, listVols := svc.ListPools, svc.ListVolumes
+		if prof.fs == "lustre" {
+			listContainers, listVols = svc.ListLustreClusters, svc.ListLustreVolumes
+		}
+		containers, err := listContainers()
+		if err != nil {
+			return nil, false, status.Errorf(codes.Unavailable, "volume %s has no PV and profile %q cannot list %s backends: %v", volumeId, prof.name, prof.fs, err)
+		}
+		for _, c := range containers {
+			vols, err := listVols(c)
+			if err != nil {
+				return nil, false, status.Errorf(codes.Unavailable, "volume %s has no PV and profile %q cannot list %s %s: %v", volumeId, prof.name, prof.fs, c, err)
+			}
+			if !slices.Contains(vols, volumeId) {
+				continue
+			}
+			attrs := map[string]string{"fs": prof.fs, volAttrProxyProfile: prof.name}
+			if prof.fs == "lustre" {
+				attrs["clusterName"] = c
+			} else {
+				attrs["poolName"] = c
+				vol, err := svc.GetVolume("zfs", c, volumeId)
+				if err != nil {
+					return nil, false, status.Errorf(codes.Unavailable, "Failed to look up volume %s: %v", volumeId, err)
+				}
+				if vol != nil {
+					attrs["shareName"] = vol.ShareName
+				}
+			}
+			hits = append(hits, attrs)
+		}
+	}
+	switch len(hits) {
+	case 0:
+		return nil, false, nil
+	case 1:
+		log.Infof("DeleteVolume: volume %s has no PV; found it on the backend (%v)", volumeId, hits[0])
+		return hits[0], true, nil
+	default:
+		return nil, false, status.Errorf(codes.FailedPrecondition,
+			"volume %s has no PV and exists on %d backends; not deleting any of them: %v", volumeId, len(hits), hits)
+	}
 }
 
 func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
