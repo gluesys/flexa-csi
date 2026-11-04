@@ -52,6 +52,8 @@ type fakeVol struct {
 	sizeMb int64
 	usedMb int64
 	snaps  []string
+	// source: provisiond's recorded content source; nil = not reported.
+	source *string
 	share  string
 	// creating: provisiond has records but the create has not finished.
 	creating bool
@@ -187,6 +189,9 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			data := map[string]interface{}{"poolName": seg[2], "volName": name, "total": v.sizeMb}
 			if v.creating {
 				data["status"] = "creating"
+			}
+			if v.source != nil {
+				data["source"] = *v.source
 			}
 			if p.provisiond && v.share != "" {
 				data["sharePath"] = fmt.Sprintf("/%s/%s/%s", seg[2], name, v.share)
@@ -832,5 +837,42 @@ func TestCreateSnapshotNameTakenByAnotherSource(t *testing.T) {
 	_, err = cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{Name: "snapshot-a", SourceVolumeId: "pvc-2"})
 	if status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("same name on another source = %v, want AlreadyExists", err)
+	}
+}
+
+// An existing volume answers a create only for the same content source; a
+// backend that does not report the source is not checked.
+func TestCreateVolumeComparesContentSource(t *testing.T) {
+	proxy, info := newFakeProxy(t, "pool1")
+	proxy.provisiond = true
+	cs, _ := newTestController(t, info, zfsPV("pvc-src", info))
+	ctx := context.Background()
+	proxy.pools["pool1"]["pvc-src"] = &fakeVol{sizeMb: 1024, share: "pvc-src"}
+	empty, fromS1 := "", "pvc-src@s1"
+	restore := func(name, snap string) *csi.CreateVolumeRequest {
+		r := createReq(name, utils.UNIT_GB)
+		r.VolumeContentSource = &csi.VolumeContentSource{Type: &csi.VolumeContentSource_Snapshot{
+			Snapshot: &csi.VolumeContentSource_SnapshotSource{SnapshotId: snapshotID("zfs", "pool1", "pvc-src", snap)}}}
+		return r
+	}
+
+	proxy.pools["pool1"]["pvc-a"] = &fakeVol{sizeMb: 1024, share: "pvc-a", source: &fromS1}
+	if _, err := cs.CreateVolume(ctx, restore("pvc-a", "s1")); err != nil {
+		t.Fatalf("same source: %v", err)
+	}
+	if _, err := cs.CreateVolume(ctx, restore("pvc-a", "s2")); status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("other snapshot = %v, want AlreadyExists", err)
+	}
+	if _, err := cs.CreateVolume(ctx, createReq("pvc-a", utils.UNIT_GB)); status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("empty over restored = %v, want AlreadyExists", err)
+	}
+	proxy.pools["pool1"]["pvc-b"] = &fakeVol{sizeMb: 1024, share: "pvc-b", source: &empty}
+	if _, err := cs.CreateVolume(ctx, restore("pvc-b", "s1")); status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("restore over empty = %v, want AlreadyExists", err)
+	}
+	// Not reported: not checked.
+	proxy.pools["pool1"]["pvc-c"] = &fakeVol{sizeMb: 1024, share: "pvc-c"}
+	if _, err := cs.CreateVolume(ctx, restore("pvc-c", "s2")); err != nil {
+		t.Fatalf("source not reported: %v", err)
 	}
 }

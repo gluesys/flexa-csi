@@ -56,6 +56,9 @@ type K8sVolumeRespSpec struct {
 	// Creating: the backend has records for the volume but its create has not
 	// finished (provisiond status "creating"). Not a usable volume yet.
 	Creating bool
+	// Source is the snapshot ("vol@snap", "" for an empty volume) the volume
+	// was created from; nil when the backend does not report it.
+	Source *string
 }
 
 //TODO type K8sSnapshotRespSpec struct {}

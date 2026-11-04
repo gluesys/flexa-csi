@@ -364,6 +364,18 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			return nil, status.Errorf(codes.AlreadyExists,
 				"Volume [%s] already exists but is larger than limitBytes", backingName)
 		}
+		// The volume must come from the same content source. A backend that
+		// does not report the source (nil) cannot be checked.
+		if k8sVolume.Source != nil {
+			want := ""
+			if srcSnap != "" {
+				want = srcVolume + "@" + srcSnap
+			}
+			if *k8sVolume.Source != want {
+				return nil, status.Errorf(codes.AlreadyExists,
+					"Volume [%s] already exists with a different source (%q, requested %q)", backingName, *k8sVolume.Source, want)
+			}
+		}
 	}
 	switch {
 	case k8sVolume == nil:
@@ -373,6 +385,10 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			}
 			if srcSnap != "" && webapi.IsMissing(err, "Snapshot("+srcVolume+"@"+srcSnap+")", "Source volume("+srcVolume+")") {
 				return nil, status.Errorf(codes.NotFound, "snapshot %s@%s does not exist: %v", srcVolume, srcSnap, err)
+			}
+			if webapi.IsAlreadyExists(err) && strings.Contains(err.Error(), "with a different source") {
+				// provisiond refuses a create over a volume made from another source.
+				return nil, status.Errorf(codes.AlreadyExists, "Failed to create volume %s: %v", backingName, err)
 			}
 			return nil, status.Errorf(codes.Internal, "Failed to create volume %s: %v", backingName, err)
 		}

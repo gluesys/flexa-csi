@@ -85,6 +85,10 @@ type ZfsVolInfo struct {
 	Vip       string `json:"vip"`
 	BaseDir   string `json:"sharePath"`
 	ShareName string `json:"shareName"`
+	// Source is the snapshot ("vol@snap", "" for an empty volume) provisiond
+	// created the volume from. nil: not reported (legacy proxy, or a volume
+	// provisiond made before it recorded sources).
+	Source *string `json:"source"`
 }
 
 func (fep *FEP) ListZfsPool() ([]string, error) {
