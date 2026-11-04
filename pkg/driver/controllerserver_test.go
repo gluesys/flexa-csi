@@ -24,6 +24,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/gluesys/flexa-csi/pkg/flexa/common"
+	"github.com/gluesys/flexa-csi/pkg/flexa/service"
 	"github.com/gluesys/flexa-csi/pkg/utils"
 )
 
@@ -48,6 +49,7 @@ type fakeProxy struct {
 
 type fakeVol struct {
 	sizeMb int64
+	usedMb int64
 	share  string
 	// creating: provisiond has records but the create has not finished.
 	creating bool
@@ -107,7 +109,7 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			return map[string]interface{}{"clusterName": seg[2], "volName": name, "volumeId": name,
 				"path": "/lustre/agent/" + seg[2] + "/" + name, "quotaMb": v.sizeMb,
-				"quota": map[string]int64{"limitMb": v.sizeMb}, "status": st}
+				"quota": map[string]int64{"limitMb": v.sizeMb, "usedMb": v.usedMb, "freeMb": v.sizeMb - v.usedMb}, "status": st}
 		}
 		switch {
 		case len(seg) == 5 && !exists:
@@ -746,5 +748,20 @@ func TestCreateVolumeMountNetwork(t *testing.T) {
 	}
 	if got := countCalls(proxy, "POST /lustre/cluster/fs1/volume/pvc-out/create"); got != 0 {
 		t.Fatalf("create POSTs outside mountNetwork = %d, want 0", got)
+	}
+}
+
+// Lustre volume stats carry the project quota usage, not zero.
+func TestLustreGetVolumeReportsUsage(t *testing.T) {
+	proxy, info := newFakeProxy(t, "pool1")
+	proxy.lustre["pvc-l"] = &fakeVol{sizeMb: 2048, usedMb: 512}
+	svc := service.NewFlexAService()
+	svc.SetFep(info)
+	v, err := svc.GetVolume("lustre", "fs1", "pvc-l")
+	if err != nil || v == nil {
+		t.Fatalf("GetVolume = %v, %v", v, err)
+	}
+	if v.Size != 2048*utils.UNIT_MB || v.Used != 512*utils.UNIT_MB || v.Free != 1536*utils.UNIT_MB {
+		t.Fatalf("size/used/free = %d/%d/%d", v.Size, v.Used, v.Free)
 	}
 }

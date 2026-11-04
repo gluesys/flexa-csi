@@ -418,6 +418,8 @@ func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName 
 			PoolName:   "",
 			VolumeName: info.VolName,
 			Size:       sizeBytes,
+			Used:       info.Quota.UsedMb * utils.UNIT_MB,
+			Free:       info.Quota.FreeMb * utils.UNIT_MB,
 			Fs:         "lustre",
 			BaseDir:    info.Path,
 			Creating:   info.Status == "creating",
