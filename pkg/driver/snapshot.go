@@ -127,6 +127,11 @@ func (cs *ControllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 	if webapi.IsMissing(err, "Volume("+srcID+")") {
 		return nil, status.Errorf(codes.NotFound, "source volume %s does not exist: %v", srcID, err)
 	}
+	if webapi.IsAlreadyExists(err) {
+		// The name is taken by a snapshot this request cannot return (another
+		// source, or not made by CSI): the CSI spec answer is AlreadyExists.
+		return nil, status.Errorf(codes.AlreadyExists, "snapshot %s of %s: %v", name, srcID, err)
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create snapshot %s of %s: %v", name, srcID, err)
 	}

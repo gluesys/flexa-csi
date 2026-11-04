@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -50,6 +51,7 @@ type fakeProxy struct {
 type fakeVol struct {
 	sizeMb int64
 	usedMb int64
+	snaps  []string
 	share  string
 	// creating: provisiond has records but the create has not finished.
 	creating bool
@@ -131,6 +133,20 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case len(seg) == 5 && seg[0] == "zfs" && seg[3] == "vip":
 		reply(w, 200, map[string]string{"vip": "10.0.0.9"}, "")
+	case len(seg) == 8 && seg[0] == "snapshot" && seg[7] == "create":
+		// provisiond: a CSI snapshot name is one snapshot; the same name on
+		// another volume is refused.
+		for vn, v := range p.pools[seg[3]] {
+			if vn != seg[5] && slices.Contains(v.snaps, body["name"]) {
+				reply(w, 409, nil, fmt.Sprintf("Snapshot(%s) already exists on Volume(%s)", body["name"], vn))
+				return
+			}
+		}
+		v := p.pools[seg[3]][seg[5]]
+		if !slices.Contains(v.snaps, body["name"]) {
+			v.snaps = append(v.snaps, body["name"])
+		}
+		reply(w, 200, map[string]string{"volName": seg[5], "snapName": body["name"], "sizeMb": strconv.FormatInt(v.sizeMb, 10)}, "")
 	case len(seg) == 3 && seg[0] == "zfs" && seg[1] == "pool" && seg[2] == "list":
 		if p.poolGone {
 			reply(w, 500, nil, "pool list failed")
@@ -791,5 +807,30 @@ func TestListVolumesLeavesOutOpenStackVolumes(t *testing.T) {
 	}
 	if proxy.pools["pool1"]["cdr-1"] == nil {
 		t.Fatal("DeleteVolume without PV removed an OpenStack volume")
+	}
+}
+
+// The same snapshot name on another source is a different snapshot:
+// AlreadyExists, while a repeat on the same source returns the first one.
+func TestCreateSnapshotNameTakenByAnotherSource(t *testing.T) {
+	proxy, info := newFakeProxy(t, "pool1")
+	proxy.provisiond = true
+	cs, _ := newTestController(t, info, zfsPV("pvc-1", info), zfsPV("pvc-2", info))
+	ctx := context.Background()
+	for _, n := range []string{"pvc-1", "pvc-2"} {
+		proxy.pools["pool1"][n] = &fakeVol{sizeMb: 1024, share: n}
+	}
+	req := &csi.CreateSnapshotRequest{Name: "snapshot-a", SourceVolumeId: "pvc-1"}
+	first, err := cs.CreateSnapshot(ctx, req)
+	if err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+	again, err := cs.CreateSnapshot(ctx, req)
+	if err != nil || again.GetSnapshot().GetSnapshotId() != first.GetSnapshot().GetSnapshotId() {
+		t.Fatalf("repeat CreateSnapshot = %v, %v", again, err)
+	}
+	_, err = cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{Name: "snapshot-a", SourceVolumeId: "pvc-2"})
+	if status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("same name on another source = %v, want AlreadyExists", err)
 	}
 }
