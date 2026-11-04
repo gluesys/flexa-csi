@@ -227,7 +227,7 @@ func (fep *FEP) lustrePost(cgiPath string, body map[string]string) (LustreVolume
 		return LustreVolumeCreateResponse{}, err
 	}
 
-	resp, err := httpClient.Do(req)
+	resp, err := fep.send(req)
 	if err != nil {
 		return LustreVolumeCreateResponse{}, err
 	}

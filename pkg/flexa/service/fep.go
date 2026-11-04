@@ -43,10 +43,12 @@ func (service *FlexAService) SetFep(proxy *common.ProxyInfo) {
 		Port:    proxy.Port,
 		MountIP: proxy.MountIP,
 		Token:   proxy.Token,
+		Scheme:  proxy.Scheme,
+		CA:      proxy.CA,
 	}
 
 	service.fep = fep
-	log.Infof("Gluesys FlexA Call(SetFep) : %s (mountIP=%s).", fep.Ip, fep.MountIP)
+	log.Infof("Gluesys FlexA Call(SetFep) : %s (mountIP=%s, scheme=%s).", fep.Ip, fep.MountIP, fep.Scheme)
 }
 
 func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*models.K8sVolumeRespSpec, error) {

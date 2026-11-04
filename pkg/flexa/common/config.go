@@ -5,6 +5,7 @@
 package common
 
 import (
+	"crypto/x509"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +27,13 @@ type ProxyInfo struct {
 	// Token is the provisiond client token sent as "Authorization: Bearer <token>".
 	// Issued on the storage with: provisiond.ctl client-token create --name csi-<cluster>.
 	Token string `yaml:"token,omitempty"`
+	// Scheme is "http" (default) or "https". provisiond serves https when
+	// prov:config tls is on (new installs); the token then travels encrypted.
+	Scheme string `yaml:"scheme,omitempty"`
+	// CA is the PEM CA certificate that signs the provisiond server
+	// certificate (python3.12 -m provisiond.ctl tls show-ca). Empty with https:
+	// the system roots verify the server.
+	CA string `yaml:"ca,omitempty"`
 	// Profiles use proxyIP/proxyPort in YAML; unmarshaling is done in LoadClientInfoConfigFromReader.
 }
 
@@ -42,6 +50,10 @@ type clientInfoYAML struct {
 	Fs string `yaml:"fs,omitempty"`
 	// Token is used by the legacy host/port proxy and by profiles without their own token.
 	Token string `yaml:"token,omitempty"`
+	// Scheme and CA, like Token, apply to the legacy host/port proxy and to
+	// profiles that do not set their own.
+	Scheme string `yaml:"scheme,omitempty"`
+	CA     string `yaml:"ca,omitempty"`
 
 	Profiles map[string]struct {
 		ProxyIP   string `yaml:"proxyIP"`
@@ -49,7 +61,35 @@ type clientInfoYAML struct {
 		MountIP   string `yaml:"mountIP,omitempty"`
 		Fs        string `yaml:"fs,omitempty"`
 		Token     string `yaml:"token,omitempty"`
+		Scheme    string `yaml:"scheme,omitempty"`
+		CA        string `yaml:"ca,omitempty"`
 	} `yaml:"profiles,omitempty"`
+}
+
+// connSettings checks a scheme/CA pair from client-info and fills the
+// defaults: scheme "http", CA only with https and only if it parses.
+func connSettings(where, scheme, ca, defScheme, defCA string) (string, string, error) {
+	scheme = strings.ToLower(strings.TrimSpace(scheme))
+	if scheme == "" {
+		scheme = defScheme
+	}
+	if scheme == "" {
+		scheme = "http"
+	}
+	if scheme != "http" && scheme != "https" {
+		return "", "", fmt.Errorf("%s: scheme must be http or https, not %q", where, scheme)
+	}
+	ca = strings.TrimSpace(ca)
+	if ca == "" {
+		ca = defCA
+	}
+	if scheme == "http" {
+		return scheme, "", nil
+	}
+	if ca != "" && !x509.NewCertPool().AppendCertsFromPEM([]byte(ca)) {
+		return "", "", fmt.Errorf("%s: ca holds no PEM certificate", where)
+	}
+	return scheme, ca, nil
 }
 
 func LoadClientInfoConfigFromReader(r io.Reader) (*ClientInfoConfig, error) {
@@ -69,13 +109,21 @@ func LoadClientInfoConfigFromReader(r io.Reader) (*ClientInfoConfig, error) {
 	}
 
 	defToken := strings.TrimSpace(in.Token)
+	defScheme := strings.ToLower(strings.TrimSpace(in.Scheme))
+	defCA := strings.TrimSpace(in.CA)
 	if strings.TrimSpace(in.Host) != "" && in.Port != 0 {
+		scheme, ca, err := connSettings("client-info", in.Scheme, in.CA, "", "")
+		if err != nil {
+			return nil, err
+		}
 		cfg.Default = &ProxyInfo{
 			Host:    strings.TrimSpace(in.Host),
 			Port:    in.Port,
 			MountIP: strings.TrimSpace(in.MountIP),
 			Fs:      strings.TrimSpace(in.Fs),
 			Token:   defToken,
+			Scheme:  scheme,
+			CA:      ca,
 		}
 	}
 
@@ -92,12 +140,18 @@ func LoadClientInfoConfigFromReader(r io.Reader) (*ClientInfoConfig, error) {
 		if token == "" {
 			token = defToken
 		}
+		scheme, ca, err := connSettings("profiles."+n, p.Scheme, p.CA, defScheme, defCA)
+		if err != nil {
+			return nil, err
+		}
 		cfg.Profiles[n] = ProxyInfo{
 			Host:    ip,
 			Port:    p.ProxyPort,
 			MountIP: strings.TrimSpace(p.MountIP),
 			Fs:      strings.TrimSpace(p.Fs),
 			Token:   token,
+			Scheme:  scheme,
+			CA:      ca,
 		}
 	}
 
@@ -113,26 +167,44 @@ func LoadClientInfoConfigFromReader(r io.Reader) (*ClientInfoConfig, error) {
 	return cfg, nil
 }
 
-// TokenFor returns the token configured for the proxy at host:port. Volume
-// attributes keep only proxyIP/proxyPort, so the token is looked up here and a
-// rotated token in client-info takes effect for existing volumes too.
-// The named profile wins when several entries point to the same proxy.
-func (cfg *ClientInfoConfig) TokenFor(host string, port int, profile string) string {
+// EntryFor returns the client-info entry for the proxy at host:port. Volume
+// attributes keep only proxyIP/proxyPort, so the token, scheme and CA are
+// looked up here, and a rotated token or a switch to https in client-info
+// takes effect for existing volumes too. The named profile wins when several
+// entries point to the same proxy; otherwise one with a token is preferred.
+func (cfg *ClientInfoConfig) EntryFor(host string, port int, profile string) (ProxyInfo, bool) {
 	if cfg == nil {
-		return ""
+		return ProxyInfo{}, false
 	}
 	if p, ok := cfg.Profiles[profile]; ok && p.Host == host && p.Port == port {
-		return p.Token
+		return p, true
 	}
 	if d := cfg.Default; d != nil && d.Host == host && d.Port == port {
-		return d.Token
+		return *d, true
 	}
-	for _, p := range cfg.Profiles {
-		if p.Host == host && p.Port == port && p.Token != "" {
-			return p.Token
+	var found *ProxyInfo
+	for n := range cfg.Profiles {
+		p := cfg.Profiles[n]
+		if p.Host != host || p.Port != port {
+			continue
+		}
+		if p.Token != "" {
+			return p, true
+		}
+		if found == nil {
+			found = &p
 		}
 	}
-	return ""
+	if found != nil {
+		return *found, true
+	}
+	return ProxyInfo{}, false
+}
+
+// TokenFor returns the token configured for the proxy at host:port.
+func (cfg *ClientInfoConfig) TokenFor(host string, port int, profile string) string {
+	e, _ := cfg.EntryFor(host, port, profile)
+	return e.Token
 }
 
 func LoadClientInfoConfig(configPath string) (*ClientInfoConfig, error) {

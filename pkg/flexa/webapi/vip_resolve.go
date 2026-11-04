@@ -52,7 +52,7 @@ func (fep *FEP) postVipResolve(cgiPath, refIP string) (string, error) {
 		return "", err
 	}
 
-	resp, err := httpClient.Do(req)
+	resp, err := fep.send(req)
 	if err != nil {
 		return "", err
 	}

@@ -70,3 +70,64 @@ profiles:
 		}
 	}
 }
+
+const testCA = `-----BEGIN CERTIFICATE-----
+MIIBhTCCASugAwIBAgIQIRi6zePL6mKjOipn+dNuaTAKBggqhkjOPQQDAjASMRAw
+DgYDVQQKEwdBY21lIENvMB4XDTE3MTAyMDE5NDMwNloXDTE4MTAyMDE5NDMwNlow
+EjEQMA4GA1UEChMHQWNtZSBDbzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABD0d
+7VNhbWvZLWPuj/RtHFjvtJBEwOkhbN/BnnE8rnZR8+sbwnc/KhCk3FhnpHZnQz7B
+5aETbbIgmuvewdjvSBSjYzBhMA4GA1UdDwEB/wQEAwICpDATBgNVHSUEDDAKBggr
+BgEFBQcDATAPBgNVHRMBAf8EBTADAQH/MCkGA1UdEQQiMCCCDmxvY2FsaG9zdDo1
+NDUzgg4xMjcuMC4wLjE6NTQ1MzAKBggqhkjOPQQDAgNIADBFAiEA2zpJEPQyz6/l
+Wf86aX6PepsntZv2GYlA5UpabfT2EZICICpJ5h/iI+i341gBmLiAFQOyTDT+/wQc
+6MF9+Yw1Yy0t
+-----END CERTIFICATE-----`
+
+// scheme and ca: top-level values are the defaults for the legacy entry and
+// for profiles, like token; http stays the default; bad values are refused.
+func TestLoadClientInfoConfigSchemeAndCA(t *testing.T) {
+	indent := "  " + strings.ReplaceAll(testCA, "\n", "\n  ")
+	cfg, err := LoadClientInfoConfigFromReader(strings.NewReader(`
+host: 10.0.0.1
+port: 9001
+scheme: HTTPS
+ca: |
+` + indent + `
+profiles:
+  a:
+    proxyIP: 10.0.0.2
+    proxyPort: 9001
+  b:
+    proxyIP: 10.0.0.3
+    proxyPort: 9001
+    scheme: http
+`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Default.Scheme != "https" || !strings.Contains(cfg.Default.CA, "BEGIN CERTIFICATE") {
+		t.Fatalf("default = %s %q", cfg.Default.Scheme, cfg.Default.CA)
+	}
+	if a := cfg.Profiles["a"]; a.Scheme != "https" || a.CA != cfg.Default.CA {
+		t.Fatalf("profile a did not inherit scheme/ca: %+v", a)
+	}
+	if b := cfg.Profiles["b"]; b.Scheme != "http" || b.CA != "" {
+		t.Fatalf("profile b = %+v, want plain http", b)
+	}
+	if e, ok := cfg.EntryFor("10.0.0.2", 9001, ""); !ok || e.Scheme != "https" {
+		t.Fatalf("EntryFor = %+v %t", e, ok)
+	}
+
+	plain, err := LoadClientInfoConfigFromReader(strings.NewReader("host: 10.0.0.1\nport: 9001\n"))
+	if err != nil || plain.Default.Scheme != "http" {
+		t.Fatalf("default scheme = %+v, %v", plain.Default, err)
+	}
+	for name, y := range map[string]string{
+		"scheme": "host: 10.0.0.1\nport: 9001\nscheme: ftp\n",
+		"ca":     "host: 10.0.0.1\nport: 9001\nscheme: https\nca: not-a-cert\n",
+	} {
+		if _, err := LoadClientInfoConfigFromReader(strings.NewReader(y)); err == nil {
+			t.Errorf("bad %s accepted", name)
+		}
+	}
+}

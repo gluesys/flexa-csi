@@ -117,6 +117,15 @@ clientInfo:
   # `token` use it. Prefer --set clientInfo.token=... over committing it to a values file.
   # Use either this or a top-level `token:` in content, not both. Per-profile tokens go in content.
   # Rotation without 401s: create csi-<cluster>-2, update the Secret, then delete the old name.
+  #
+  # https: when provisiond serves TLS (prov:config tls=on, the default on new installs),
+  # put in content, at the top level (all profiles) or per profile:
+  #   scheme: https
+  #   ca: |
+  #     <output of: cd /anystor/provision && python3.12 -m provisiond.ctl tls show-ca>
+  # The server certificate is always verified against this CA (no skip option). The CA
+  # changes only after "tls renew --new-ca"; adding VIPs re-signs with the same CA.
+  # Without scheme the driver uses http (upgraded storage keeps tls=off).
   token: ""
   content: |
     profiles:

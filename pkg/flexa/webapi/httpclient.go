@@ -5,11 +5,14 @@
 package webapi
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,11 +26,62 @@ const DefaultRequestTimeout = 5 * time.Minute
 // proxy answers or this timeout fires instead.
 var httpClient = &http.Client{Timeout: DefaultRequestTimeout}
 
+var (
+	clientsMu sync.Mutex
+	// tlsClients holds one https client per CA (PEM; "" = system roots), so
+	// connections are reused across calls.
+	tlsClients     = map[string]*http.Client{}
+	requestTimeout = DefaultRequestTimeout
+)
+
 // SetRequestTimeout changes the per-call proxy timeout (0 keeps the default).
 func SetRequestTimeout(d time.Duration) {
-	if d > 0 {
-		httpClient.Timeout = d
+	if d <= 0 {
+		return
 	}
+	clientsMu.Lock()
+	defer clientsMu.Unlock()
+	requestTimeout = d
+	httpClient.Timeout = d
+	for _, c := range tlsClients {
+		c.Timeout = d
+	}
+}
+
+// client returns the HTTP client for this proxy: plain for http, and for
+// https one that verifies the server certificate against fep.CA (or the
+// system roots when no CA is set). Verification is never skipped.
+func (fep *FEP) client() (*http.Client, error) {
+	if fep.Scheme != "https" {
+		return httpClient, nil
+	}
+	clientsMu.Lock()
+	defer clientsMu.Unlock()
+	if c, ok := tlsClients[fep.CA]; ok {
+		return c, nil
+	}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if fep.CA != "" {
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM([]byte(fep.CA)) {
+			return nil, fmt.Errorf("proxy %s:%d: ca holds no PEM certificate", fep.Ip, fep.Port)
+		}
+		cfg.RootCAs = pool
+	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = cfg
+	c := &http.Client{Timeout: requestTimeout, Transport: tr}
+	tlsClients[fep.CA] = c
+	return c, nil
+}
+
+// send sends req with this proxy's client.
+func (fep *FEP) send(req *http.Request) (*http.Response, error) {
+	c, err := fep.client()
+	if err != nil {
+		return nil, err
+	}
+	return c.Do(req)
 }
 
 // APIError is a non-2xx proxy response.

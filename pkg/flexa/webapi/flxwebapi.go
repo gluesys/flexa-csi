@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	//"csi/pkg/logger"
 	log "github.com/sirupsen/logrus"
@@ -24,6 +26,10 @@ type FEP struct {
 	MountIP string
 	// Token is the provisiond client token; every request carries it as a Bearer token.
 	Token string
+	// Scheme is "https" or "http" (""); CA is the PEM CA that signs the
+	// provisiond server certificate for https.
+	Scheme string
+	CA     string
 }
 
 // apiPrefix is the provisiond namespace for the CSI driver contract.
@@ -32,7 +38,11 @@ const apiPrefix = "csi"
 
 // apiURL builds the provisiond URL for a contract path such as "zfs/pool/list".
 func (fep *FEP) apiURL(cgiPath string) string {
-	return fmt.Sprintf("http://%s:%d/%s/%s", fep.Ip, fep.Port, apiPrefix, cgiPath)
+	scheme := "http"
+	if fep.Scheme == "https" {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s/%s/%s", scheme, net.JoinHostPort(fep.Ip, strconv.Itoa(fep.Port)), apiPrefix, cgiPath)
 }
 
 // newRequest builds a provisiond request with the JSON content type and the client token.
@@ -117,7 +127,7 @@ func (fep *FEP) postJSON(body interface{}, apiTemplate interface{}, cgiPath stri
 
 // do sends req and decodes the {data,msg} envelope into apiTemplate.
 func (fep *FEP) do(req *http.Request, apiTemplate interface{}, cgiPath string) (Response, error) {
-	resp, err := httpClient.Do(req)
+	resp, err := fep.send(req)
 	if err != nil {
 		return Response{}, err
 	}

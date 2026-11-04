@@ -3,8 +3,17 @@
 # token: provisiond client token (Authorization: Bearer). Issue it on the storage with
 #   cd /anystor/provision && python3.12 -m provisiond.ctl client-token create --name csi-<cluster>
 # The top-level token applies to every profile without its own `token`.
+# scheme/ca: when provisiond serves https (prov:config tls=on, default on new installs),
+#   set scheme: https and ca: the PEM printed by
+#   cd /anystor/provision && python3.12 -m provisiond.ctl tls show-ca
+# Like token, top-level values apply to profiles without their own. Default scheme: http.
 
 token: "<provisiond csi token>"
+# scheme: https
+# ca: |
+#   -----BEGIN CERTIFICATE-----
+#   ...
+#   -----END CERTIFICATE-----
 
 profiles:
   zfs:

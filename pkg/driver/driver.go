@@ -175,7 +175,9 @@ func (d *Driver) ProxyForVolume(attrs map[string]string) (*common.ProxyInfo, err
 	if !ok {
 		return d.SelectProxy(profile)
 	}
-	proxy.Token = d.GetClientInfoConfig().TokenFor(proxy.Host, proxy.Port, profile)
+	if e, ok := d.GetClientInfoConfig().EntryFor(proxy.Host, proxy.Port, profile); ok {
+		proxy.Token, proxy.Scheme, proxy.CA = e.Token, e.Scheme, e.CA
+	}
 	if proxy.Token == "" {
 		// The volume's proxy address matches no client-info entry (e.g. proxyIP changed
 		// after the volume was created). The token is never sent to an unknown address.

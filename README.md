@@ -83,6 +83,8 @@ cd /anystor/provision && python3.12 -m provisiond.ctl client-token create --name
 
 The token is printed once. With Helm, pass it as `--set clientInfo.token=<token>`. To rotate, issue a new token with the same name and update the Secret; the driver reloads it without a restart, and existing volumes pick it up because the token is looked up by proxy address, not stored in the PV.
 
+**https:** provisiond serves https when `prov:config tls` is on (the default on new installs; upgraded storage keeps it off). Put `scheme: https` and `ca:` (the PEM from `cd /anystor/provision && python3.12 -m provisiond.ctl tls show-ca`) in `client-info.yml`, at the top level or per profile. The driver always verifies the server certificate against that CA; there is no option to skip it. The CA stays the same when VIPs are added and changes only after `tls renew --new-ca`. Existing volumes switch with the Secret, because scheme and CA are looked up by proxy address like the token.
+
 **Raw manifests:** Prepare `config/client-info.yml` with `token` and `profiles` (`proxyIP`, `proxyPort`, optional `mountIP` for VIP resolve). See the template at [`config/client-info-template.yml`](config/client-info-template.yml).
 
 #### Creating the Secret manually
