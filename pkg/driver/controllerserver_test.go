@@ -164,11 +164,18 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			reply(w, 200, data, "")
 		case "create":
+			mb, _ := strconv.ParseInt(body["sizeValue"], 10, 64)
+			if exists && p.provisiond && v.sizeMb >= mb {
+				// provisiond: the create is idempotent and finishes (joins or
+				// settles) an unfinished one on the same volume.
+				v.creating = false
+				reply(w, 200, map[string]string{"name": name}, "")
+				return
+			}
 			if exists {
 				reply(w, 409, nil, fmt.Sprintf("Volume(%s) already exists", name))
 				return
 			}
-			mb, _ := strconv.ParseInt(body["sizeValue"], 10, 64)
 			pool[name] = &fakeVol{sizeMb: mb}
 			reply(w, 200, map[string]string{"name": name}, "")
 		case "delete":
@@ -638,20 +645,28 @@ func TestCreateVolumeDoesNotTrustAnUnfinishedCreate(t *testing.T) {
 		t.Fatalf("lustre create POSTs after a finished create = %d, want 1", got)
 	}
 
-	// ZFS: wait (Unavailable) and touch nothing; the external-provisioner retries.
+	// ZFS: the same — dataset create and share create are sent again, and
+	// provisiond finishes the unfinished create before answering.
 	proxy.provisiond = true
 	proxy.pools["pool1"]["pvc-z"] = &fakeVol{sizeMb: 1024, share: "pvc-z", creating: true}
-	if _, err := cs.CreateVolume(ctx, createReq("pvc-z", utils.UNIT_GB)); status.Code(err) != codes.Unavailable {
-		t.Fatalf("zfs create over an unfinished one = %v, want Unavailable", err)
+	resp, err = cs.CreateVolume(ctx, createReq("pvc-z", utils.UNIT_GB))
+	if err != nil {
+		t.Fatalf("zfs create over an unfinished one: %v", err)
 	}
-	for _, c := range proxy.calls {
-		if strings.HasPrefix(c, "POST ") && strings.Contains(c, "pvc-z") {
-			t.Fatalf("zfs unfinished create sent %q", c)
-		}
+	if got := countCalls(proxy, "POST /zfs/pool/pool1/volume/pvc-z/create"); got != 1 {
+		t.Fatalf("zfs create POSTs = %d, want 1", got)
 	}
-	proxy.pools["pool1"]["pvc-z"].creating = false
+	if got := countCalls(proxy, "POST /share/pool/pool1/volume/pvc-z/pvc-z/create"); got != 1 {
+		t.Fatalf("zfs share create POSTs = %d, want 1", got)
+	}
+	if proxy.pools["pool1"]["pvc-z"].creating || resp.GetVolume().GetVolumeContext()["baseDir"] != "/pool1/pvc-z/pvc-z" {
+		t.Fatalf("zfs volume not completed: %+v", resp.GetVolume())
+	}
 	if _, err := cs.CreateVolume(ctx, createReq("pvc-z", utils.UNIT_GB)); err != nil {
-		t.Fatalf("zfs create after the backend finished: %v", err)
+		t.Fatalf("repeat zfs create: %v", err)
+	}
+	if got := countCalls(proxy, "POST /zfs/pool/pool1/volume/pvc-z/create"); got != 1 {
+		t.Fatalf("zfs create POSTs after a finished create = %d, want 1", got)
 	}
 }
 

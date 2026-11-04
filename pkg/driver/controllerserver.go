@@ -343,15 +343,11 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	if k8sVolume != nil && k8sVolume.Creating {
 		// provisiond has records for the volume but its create has not finished
 		// (still running, or left by a provisiond that died). Never report it as
-		// created. Lustre: send the create again; provisiond joins the running
-		// create or rolls back the dead one first, then answers only when the
-		// volume is complete. ZFS creates in two calls (dataset, share); a
-		// create still in progress is left to finish, so wait for the backend
-		// instead.
-		if fs != "lustre" {
-			return nil, status.Errorf(codes.Unavailable,
-				"Volume [%s] is still being created on the backend; retry later", backingName)
-		}
+		// created: send the create again. provisiond serializes it with the
+		// running create on the same volume key (OpGate), joins the same request
+		// or settles a dead one first, and answers only when the volume is
+		// complete. Both creates are idempotent there (Lustre volume, ZFS
+		// dataset and share), so an already finished step is not redone.
 		log.Infof("Volume [%s] is still being created on the backend; sending create again", backingName)
 		k8sVolume = nil
 	}
