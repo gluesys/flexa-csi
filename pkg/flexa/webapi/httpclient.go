@@ -87,6 +87,15 @@ func IsMissing(err error, what ...string) bool {
 	return false
 }
 
+// IsRejected reports that the proxy refused the request itself (400): it did not
+// act on it, and the same request will be refused again. Timeouts, dropped
+// connections, 409 and 5xx are not rejections: the call may have taken effect,
+// or may succeed when sent again.
+func IsRejected(err error) bool {
+	var e *APIError
+	return errors.As(err, &e) && e.Status == http.StatusBadRequest
+}
+
 // IsAlreadyExists reports a 409 "already exists" answer.
 func IsAlreadyExists(err error) bool {
 	var e *APIError

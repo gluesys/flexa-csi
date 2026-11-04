@@ -345,8 +345,9 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		// (still running, or left by a provisiond that died). Never report it as
 		// created. Lustre: send the create again; provisiond joins the running
 		// create or rolls back the dead one first, then answers only when the
-		// volume is complete. ZFS creates in two calls (dataset, share) and rolls
-		// the dataset back when the share fails, so wait for the backend instead.
+		// volume is complete. ZFS creates in two calls (dataset, share); a
+		// create still in progress is left to finish, so wait for the backend
+		// instead.
 		if fs != "lustre" {
 			return nil, status.Errorf(codes.Unavailable,
 				"Volume [%s] is still being created on the backend; retry later", backingName)

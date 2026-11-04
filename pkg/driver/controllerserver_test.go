@@ -31,9 +31,11 @@ import (
 // and a second share create is 409 "already exists". provisiond=true switches to the
 // provisiond shape (share path in volume info, idempotent share create).
 type fakeProxy struct {
-	mu         sync.Mutex
-	pools      map[string]map[string]*fakeVol
-	failShare  bool
+	mu    sync.Mutex
+	pools map[string]map[string]*fakeVol
+	// failShare: 0 creates the share; an HTTP status answers it without
+	// creating; shareLost creates it and then drops the connection.
+	failShare  int
 	provisiond bool
 	// poolGone makes every pool answer "does not exist", as the legacy proxy
 	// does while its monitor snapshot misses the pool.
@@ -60,6 +62,17 @@ func newFakeProxy(t *testing.T, pools ...string) (*fakeProxy, *common.ProxyInfo)
 	host, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 	n, _ := strconv.Atoi(port)
 	return p, &common.ProxyInfo{Host: host, Port: n}
+}
+
+// shareLost makes the fake create the share and then drop the connection, as
+// when the answer is lost after the backend acted.
+const shareLost = -1
+
+func dropConnection(w http.ResponseWriter) {
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err == nil {
+		_ = conn.Close()
+	}
 }
 
 func reply(w http.ResponseWriter, code int, data interface{}, msg string) {
@@ -186,8 +199,13 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		switch seg[6] {
 		case "create":
-			if p.failShare {
-				reply(w, 500, nil, "share create failed")
+			if p.failShare == shareLost {
+				v.share = seg[5]
+				dropConnection(w)
+				return
+			}
+			if p.failShare != 0 {
+				reply(w, p.failShare, nil, "share create failed")
 				return
 			}
 			if v.share == seg[5] && !p.provisiond {
@@ -353,9 +371,11 @@ func TestCreateVolumeRollbackAndShareOnlyRetry(t *testing.T) {
 	cs, _ := newTestController(t, info)
 	ctx := context.Background()
 
-	proxy.failShare = true
+	// A share request the proxy refused (400) can never succeed: the dataset
+	// goes away.
+	proxy.failShare = http.StatusBadRequest
 	if _, err := cs.CreateVolume(ctx, createReq("pvc-1", utils.UNIT_GB)); status.Code(err) != codes.Internal {
-		t.Fatalf("create with failing share = %v, want Internal", err)
+		t.Fatalf("create with refused share = %v, want Internal", err)
 	}
 	if _, ok := proxy.pools["pool1"]["pvc-1"]; ok {
 		t.Fatal("rollback left the dataset behind")
@@ -363,7 +383,7 @@ func TestCreateVolumeRollbackAndShareOnlyRetry(t *testing.T) {
 
 	// A dataset left without its share (e.g. the driver died in between) gets
 	// only the share on the next attempt.
-	proxy.failShare = false
+	proxy.failShare = 0
 	proxy.pools["pool1"]["pvc-2"] = &fakeVol{sizeMb: 1024}
 	resp, err := cs.CreateVolume(ctx, createReq("pvc-2", utils.UNIT_GB))
 	if err != nil {
@@ -371,6 +391,42 @@ func TestCreateVolumeRollbackAndShareOnlyRetry(t *testing.T) {
 	}
 	if resp.GetVolume().GetVolumeContext()["baseDir"] == "" || proxy.pools["pool1"]["pvc-2"].share != "pvc-2" {
 		t.Fatal("share was not created")
+	}
+}
+
+// When the share result is unknown the dataset may already be in use (another
+// controller can have returned it), so it must never be destroyed.
+func TestCreateVolumeKeepsDatasetWhenShareResultUnknown(t *testing.T) {
+	for _, provisiond := range []bool{false, true} {
+		for _, fail := range []int{shareLost, http.StatusInternalServerError, http.StatusConflict, http.StatusServiceUnavailable} {
+			proxy, info := newFakeProxy(t, "pool1")
+			proxy.provisiond = provisiond
+			cs, _ := newTestController(t, info)
+			ctx := context.Background()
+
+			proxy.failShare = fail
+			if _, err := cs.CreateVolume(ctx, createReq("pvc-1", utils.UNIT_GB)); err == nil {
+				t.Fatalf("provisiond=%t fail=%d: create succeeded", provisiond, fail)
+			}
+			if _, ok := proxy.pools["pool1"]["pvc-1"]; !ok {
+				t.Fatalf("provisiond=%t fail=%d: dataset destroyed on an unknown share result", provisiond, fail)
+			}
+			for _, c := range proxy.calls {
+				if strings.Contains(c, "/destroy") || strings.Contains(c, "/delete") {
+					t.Fatalf("provisiond=%t fail=%d: destructive call %s", provisiond, fail, c)
+				}
+			}
+
+			// The retry converges on the same volume.
+			proxy.failShare = 0
+			resp, err := cs.CreateVolume(ctx, createReq("pvc-1", utils.UNIT_GB))
+			if err != nil {
+				t.Fatalf("provisiond=%t fail=%d: retry: %v", provisiond, fail, err)
+			}
+			if resp.GetVolume().GetVolumeContext()["baseDir"] != "/pool1/pvc-1/pvc-1" || proxy.pools["pool1"]["pvc-1"].share != "pvc-1" {
+				t.Fatalf("provisiond=%t fail=%d: retry did not finish the share: %v", provisiond, fail, resp.GetVolume().GetVolumeContext())
+			}
+		}
 	}
 }
 
