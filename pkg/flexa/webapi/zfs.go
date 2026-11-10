@@ -202,8 +202,12 @@ func (fep *FEP) ZfsCreateVolume(size int64, volId string, volName string, poolNa
 
 // shareDir is the directory inside the volume that is exported; "" means the
 // share name. A restored volume exports the directory copied from its source.
-func (fep *FEP) ZfsCreateShareNfs(volId string, volName string, poolName string, shareDir string, zoneName string, address string, subnet string, access string, optionNoRootSquashing string, optionInsecure string) (string, error) {
+func (fep *FEP) ZfsCreateShareNfs(volId string, volName string, poolName string, shareDir string, zoneName string, address string, subnet string, access string, optionNoRootSquashing string, optionInsecure string, exportMode string) (string, error) {
 	params := url.Values{}
+	if exportMode != "" {
+		// Only provisiond knows it; the legacy proxy never receives an empty extra field.
+		params.Set("exportMode", exportMode)
+	}
 	params.Set("zoneName", zoneName)
 	params.Set("address", address)
 	params.Set("subNetmask", subnet)

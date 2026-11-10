@@ -150,6 +150,12 @@ clientInfo:
 #   "198.51.100.0/24" to put NFS on an IB data network. Replaces the profile mountIP for
 #   this class (server address and default NFS secure zone). A single IP means its /24.
 #   Creating fails when the storage has no address in this network.
+# nfsExportMode (optional, ZFS NFS, provisiond only): "root" exports the pool root once per secure
+#   zone (crossmnt) and creates each PVC under it, so creating and deleting PVCs runs no exportfs.
+#   The pool becomes CSI-only (Cinder/Manila volumes are refused) until its last such PVC is
+#   deleted, and all PVCs of the pool and secure zone share one set of server NFS options
+#   (nfsAccess, nfsNoRootSquashing, nfsInsecure): a PVC asking for others fails. "volume" exports
+#   each PVC (per-PVC options). Unset: the provisiond default (prov:config zfsRootExport, off).
 storageClass:
   zfs_poolA:
     enabled: false

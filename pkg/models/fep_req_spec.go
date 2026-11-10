@@ -25,6 +25,7 @@ type CreateVolumeSpec struct {
 	NfsAccess        string // nfs secure : Access Mode ( RW, RO )
 	NfsNoRoot        string // nfs NoRootSquashing Option
 	NfsInsecure      string // nfs Insecure Option
+	NfsExportMode    string // ZFS NFS export (StorageClass flexa.io/nfsExportMode): root|volume, "" = provisiond default
 	PvcQos           string // optional Lustre PVC QoS (PVC annotation flexa.io/pvcQos), passed to proxy as pvcQos
 	NoExport         bool   // Lustre native mount (protocol=lustre): ask provisiond for no NFS export
 	SubDir           string // Lustre: directory under the filesystem root that holds the volume (k8s/<namespace>)

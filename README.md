@@ -229,6 +229,12 @@ The controller reads **PersistentVolumeClaim** annotations with the `flexa.io/` 
 | `flexa.io/nfsInsecure` | `on` allows client ports above 1024. Proxy default `off`. |
 | `flexa.io/pvcQos` | Lustre PVC QoS (FlexA 1.5 or later). |
 
+ZFS NFS export mode is a **StorageClass-only** parameter (a PVC annotation does not change it):
+
+| Parameter | Purpose |
+| --------- | ------- |
+| `flexa.io/nfsExportMode` | `root`: one pool-root export (crossmnt) per secure zone; PVCs are created under it with no `exportfs` per PVC (suited to many short-lived PVCs such as Kubeflow). The pool is CSI-only while such PVCs exist, and all PVCs of the pool and secure zone use the same server options (`nfsAccess`, `nfsNoRootSquashing`, `nfsInsecure`); a PVC with other values fails. `volume`: one export per PVC, per-PVC options. Unset: provisiond default (`zfsRootExport`, off). provisiond only. |
+
 Use values such as `"on"` / `"off"` or addresses as in the samples; follow Gluesys FlexA documentation for your environment.
 
 ### Pod annotations

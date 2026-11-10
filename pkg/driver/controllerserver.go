@@ -258,6 +258,12 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	log.Infof("NFS Secure : Access(%s) NoRootSquashing(%s) Insecure(%s)", nfsAccess, nfsNoRoot, nfsInsecure)
 
+	// ZFS NFS export 방식은 StorageClass 에서만 고른다(PVC 어노테이션 아님): root 는 풀을 CSI 전용으로 쓴다.
+	nfsExportMode, err := nfsExportMode(params)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+
 	pvcQos := opt(volAttrPvcQos)
 	log.Infof("PVC QoS : %s", pvcQos)
 
@@ -275,23 +281,24 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	spec := &models.CreateVolumeSpec{
-		VolumeId:    volumeID,
-		VolumeName:  backingName,
-		PoolName:    poolOrCluster,
-		Fs:          fs,
-		Size:        sizeInByte,
-		OptionISS:   optionISS,
-		OptionSVS:   optionSVS,
-		OptionComp:  optionComp,
-		OptionDedup: optionDedup,
-		SecureAddr:  secureAddr,
-		SecureSub:   secureSub,
-		NfsAccess:   nfsAccess,
-		NfsNoRoot:   nfsNoRoot,
-		NfsInsecure: nfsInsecure,
-		PvcQos:      pvcQos,
-		NoExport:    fs == "lustre" && params["protocol"] == "lustre",
-		SubDir:      lustreSubDir(fs, pvcNS),
+		VolumeId:      volumeID,
+		VolumeName:    backingName,
+		PoolName:      poolOrCluster,
+		Fs:            fs,
+		Size:          sizeInByte,
+		OptionISS:     optionISS,
+		OptionSVS:     optionSVS,
+		OptionComp:    optionComp,
+		OptionDedup:   optionDedup,
+		SecureAddr:    secureAddr,
+		SecureSub:     secureSub,
+		NfsAccess:     nfsAccess,
+		NfsNoRoot:     nfsNoRoot,
+		NfsInsecure:   nfsInsecure,
+		NfsExportMode: nfsExportMode,
+		PvcQos:        pvcQos,
+		NoExport:      fs == "lustre" && params["protocol"] == "lustre",
+		SubDir:        lustreSubDir(fs, pvcNS),
 
 		SourceVolumeId:   srcVolume,
 		SourceSnapshotId: srcSnap,

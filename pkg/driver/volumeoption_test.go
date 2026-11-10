@@ -33,3 +33,15 @@ func TestVolumeOption(t *testing.T) {
 		}
 	}
 }
+
+func TestNfsExportMode(t *testing.T) {
+	for in, want := range map[string]string{"": "", "root": "root", " Volume ": "volume"} {
+		got, err := nfsExportMode(map[string]string{paramNfsExportMode: in})
+		if err != nil || got != want {
+			t.Errorf("nfsExportMode(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	if _, err := nfsExportMode(map[string]string{paramNfsExportMode: "pool"}); err == nil {
+		t.Error("nfsExportMode(pool) should fail")
+	}
+}

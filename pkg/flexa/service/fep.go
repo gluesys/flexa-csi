@@ -167,7 +167,7 @@ func (service *FlexAService) CreateZfsShare(spec *models.CreateVolumeSpec) (*mod
 
 func (service *FlexAService) createZfsShare(spec *models.CreateVolumeSpec) (string, error) {
 	baseDir, err := service.fep.ZfsCreateShareNfs(spec.VolumeId, spec.VolumeName, spec.PoolName, spec.ShareDir,
-		spec.SecureName, spec.SecureAddr, spec.SecureSub, spec.NfsAccess, spec.NfsNoRoot, spec.NfsInsecure)
+		spec.SecureName, spec.SecureAddr, spec.SecureSub, spec.NfsAccess, spec.NfsNoRoot, spec.NfsInsecure, spec.NfsExportMode)
 	if err != nil {
 		log.Errorf("Gluesys FlexA Call(CreateShare) : Fail Create Share in Volume(%s)", spec.VolumeName)
 		return "", err
