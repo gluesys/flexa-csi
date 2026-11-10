@@ -53,7 +53,7 @@ func (fep *FEP) LustreCreateVolume(
 	subDir string,
 ) (LustreVolumeCreateResponse, error) {
 	if clusterName == "" || volName == "" {
-		return LustreVolumeCreateResponse{}, fmt.Errorf("clusterName and volName are required")
+		return LustreVolumeCreateResponse{}, fmt.Errorf("clusterName and volName are required (%w)", ErrNotSent)
 	}
 	if access == "" {
 		access = "RW"

@@ -18,6 +18,7 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	//"sort"
 	//"strconv"
@@ -397,7 +398,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 				// provisiond refuses a create over a volume made from another source.
 				return nil, status.Errorf(codes.AlreadyExists, "Failed to create volume %s: %v", backingName, err)
 			}
-			return nil, status.Errorf(codes.Internal, "Failed to create volume %s: %v", backingName, err)
+			return nil, createError(backingName, err)
 		}
 	case fs == "zfs" && strings.TrimSpace(k8sVolume.BaseDir) == "":
 		// The legacy proxy reports no share path, and an earlier attempt may have
@@ -405,7 +406,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		log.Infof("Volume [%s] exists without a known share path; ensuring the share", backingName)
 		existingSize := k8sVolume.Size
 		if k8sVolume, err = reqService.CreateZfsShare(spec); err != nil {
-			return nil, status.Errorf(codes.Internal, "Failed to create share for volume %s: %v", backingName, err)
+			return nil, createError(backingName, err)
 		}
 		// The dataset was not touched: report its size, not the requested one.
 		if existingSize > 0 {
@@ -447,6 +448,17 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			ContentSource: req.GetVolumeContentSource(),
 		},
 	}, nil
+}
+
+// createError reports a failed create. A failure that may have left the volume
+// on the backend is Unavailable: the provisioner treats it as still in
+// progress and keeps the claim, so a PVC deleted meanwhile still ends with the
+// volume deleted. Other failures created nothing and are final (Internal).
+func createError(name string, err error) error {
+	if errors.Is(err, service.ErrCreateUnfinished) {
+		return status.Errorf(codes.Unavailable, "Failed to create volume %s (will retry): %v", name, err)
+	}
+	return status.Errorf(codes.Internal, "Failed to create volume %s: %v", name, err)
 }
 
 func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {

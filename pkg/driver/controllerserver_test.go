@@ -46,6 +46,13 @@ type fakeProxy struct {
 	calls    []string
 	// lustre answers like provisiond for cluster "fs1".
 	lustre map[string]*fakeVol
+	// failCreate answers a ZFS dataset or Lustre volume create with this HTTP
+	// status without creating it (shareLost: creates it, then drops the
+	// connection). failVip answers the server address lookup with it.
+	failCreate int
+	failVip    int
+	// failDelete answers a ZFS dataset delete with this HTTP status.
+	failDelete int
 }
 
 type fakeVol struct {
@@ -102,6 +109,10 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case seg[0] == "lustre" && len(seg) == 3 && seg[1] == "vip":
+		if p.failVip != 0 {
+			reply(w, p.failVip, nil, "vip lookup failed")
+			return
+		}
 		reply(w, 200, map[string]string{"vip": "10.0.0.8"}, "")
 	case seg[0] == "lustre" && len(seg) >= 5 && seg[1] == "cluster" && seg[3] == "volume":
 		name := seg[4]
@@ -121,6 +132,10 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case len(seg) == 5:
 			reply(w, 200, data(v), "")
 		case seg[5] == "create":
+			if p.failCreate > 0 {
+				reply(w, p.failCreate, nil, "volume create failed")
+				return
+			}
 			// provisiond: a create on a volume whose create is unfinished joins or
 			// settles it and answers when the volume is complete.
 			if !exists {
@@ -129,11 +144,19 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				p.lustre[name] = v
 			}
 			v.creating = false
+			if p.failCreate == shareLost {
+				dropConnection(w)
+				return
+			}
 			reply(w, 200, data(v), "")
 		default:
 			reply(w, 404, nil, "no route")
 		}
 	case len(seg) == 5 && seg[0] == "zfs" && seg[3] == "vip":
+		if p.failVip != 0 {
+			reply(w, p.failVip, nil, "vip lookup failed")
+			return
+		}
 		reply(w, 200, map[string]string{"vip": "10.0.0.9"}, "")
 	case len(seg) == 8 && seg[0] == "snapshot" && seg[7] == "create":
 		// provisiond: a CSI snapshot name is one snapshot; the same name on
@@ -200,6 +223,15 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			reply(w, 200, data, "")
 		case "create":
 			mb, _ := strconv.ParseInt(body["sizeValue"], 10, 64)
+			if p.failCreate > 0 {
+				reply(w, p.failCreate, nil, "volume create failed")
+				return
+			}
+			if p.failCreate == shareLost {
+				pool[name] = &fakeVol{sizeMb: mb}
+				dropConnection(w)
+				return
+			}
 			if exists && p.provisiond && v.sizeMb >= mb {
 				// provisiond: the create is idempotent and finishes (joins or
 				// settles) an unfinished one on the same volume.
@@ -214,6 +246,10 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pool[name] = &fakeVol{sizeMb: mb}
 			reply(w, 200, map[string]string{"name": name}, "")
 		case "delete":
+			if p.failDelete != 0 {
+				reply(w, p.failDelete, nil, "delete failed")
+				return
+			}
 			if !exists {
 				reply(w, 409, nil, fmt.Sprintf("Volume(%s) does not exist", name))
 				return
@@ -447,8 +483,10 @@ func TestCreateVolumeKeepsDatasetWhenShareResultUnknown(t *testing.T) {
 			ctx := context.Background()
 
 			proxy.failShare = fail
-			if _, err := cs.CreateVolume(ctx, createReq("pvc-1", utils.UNIT_GB)); err == nil {
-				t.Fatalf("provisiond=%t fail=%d: create succeeded", provisiond, fail)
+			// Not final: the provisioner must keep the claim so a PVC deleted now
+			// still gets the kept dataset deleted.
+			if _, err := cs.CreateVolume(ctx, createReq("pvc-1", utils.UNIT_GB)); status.Code(err) != codes.Unavailable {
+				t.Fatalf("provisiond=%t fail=%d: create = %v, want Unavailable", provisiond, fail, err)
 			}
 			if _, ok := proxy.pools["pool1"]["pvc-1"]; !ok {
 				t.Fatalf("provisiond=%t fail=%d: dataset destroyed on an unknown share result", provisiond, fail)
@@ -874,5 +912,90 @@ func TestCreateVolumeComparesContentSource(t *testing.T) {
 	proxy.pools["pool1"]["pvc-c"] = &fakeVol{sizeMb: 1024, share: "pvc-c"}
 	if _, err := cs.CreateVolume(ctx, restore("pvc-c", "s2")); err != nil {
 		t.Fatalf("source not reported: %v", err)
+	}
+}
+
+// A create that may have left the volume on the backend is Unavailable (the
+// provisioner keeps retrying, also for a PVC deleted meanwhile, and deletes
+// what it finally gets). One that created nothing is final.
+func TestCreateVolumeErrorCodeFollowsWhatIsLeft(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name                string
+		lustre              bool
+		failCreate, failVip int
+		want                codes.Code
+		left                bool
+	}{
+		{"zfs dataset create answer lost", false, shareLost, 0, codes.Unavailable, true},
+		{"zfs dataset create 500", false, http.StatusInternalServerError, 0, codes.Unavailable, false},
+		{"zfs dataset create refused 409", false, http.StatusConflict, 0, codes.Internal, false},
+		{"zfs dataset create refused 400", false, http.StatusBadRequest, 0, codes.Internal, false},
+		{"zfs server address after create", false, 0, http.StatusNotFound, codes.Unavailable, true},
+		{"lustre create answer lost", true, shareLost, 0, codes.Unavailable, true},
+		{"lustre create 503", true, http.StatusServiceUnavailable, 0, codes.Unavailable, false},
+		{"lustre create refused 409", true, http.StatusConflict, 0, codes.Internal, false},
+		{"lustre server address after create", true, 0, http.StatusNotFound, codes.Unavailable, true},
+	}
+	for _, tc := range cases {
+		proxy, info := newFakeProxy(t, "pool1")
+		proxy.provisiond = true
+		cs, _ := newTestController(t, info)
+		proxy.failCreate, proxy.failVip = tc.failCreate, tc.failVip
+		req := createReq("pvc-1", utils.UNIT_GB)
+		if tc.lustre {
+			req = lustreCreateReq("pvc-1", utils.UNIT_GB)
+		}
+		_, err := cs.CreateVolume(ctx, req)
+		if status.Code(err) != tc.want {
+			t.Fatalf("%s: create = %v, want %s", tc.name, err, tc.want)
+		}
+		proxy.mu.Lock()
+		_, zfsLeft := proxy.pools["pool1"]["pvc-1"]
+		_, lustreLeft := proxy.lustre["pvc-1"]
+		proxy.mu.Unlock()
+		if left := zfsLeft || lustreLeft; left != tc.left {
+			t.Fatalf("%s: volume left on the backend = %t, want %t", tc.name, left, tc.left)
+		}
+	}
+}
+
+// A refused share (400) is final only when the dataset is really removed;
+// a dataset that could not be removed keeps the create in progress.
+func TestCreateVolumeRefusedShareIsFinalOnlyWhenDatasetRemoved(t *testing.T) {
+	ctx := context.Background()
+	for _, failDelete := range []int{0, http.StatusInternalServerError} {
+		proxy, info := newFakeProxy(t, "pool1")
+		proxy.provisiond = true
+		cs, _ := newTestController(t, info)
+		proxy.failShare, proxy.failDelete = http.StatusBadRequest, failDelete
+		want, left := codes.Internal, false
+		if failDelete != 0 {
+			want, left = codes.Unavailable, true
+		}
+		if _, err := cs.CreateVolume(ctx, createReq("pvc-1", utils.UNIT_GB)); status.Code(err) != want {
+			t.Fatalf("failDelete=%d: create = %v, want %s", failDelete, err, want)
+		}
+		if _, ok := proxy.pools["pool1"]["pvc-1"]; ok != left {
+			t.Fatalf("failDelete=%d: dataset left = %t, want %t", failDelete, ok, left)
+		}
+	}
+
+	// The share-only path (dataset left by an earlier attempt) does the same.
+	proxy, info := newFakeProxy(t, "pool1")
+	proxy.provisiond = true
+	cs, _ := newTestController(t, info)
+	proxy.pools["pool1"]["pvc-2"] = &fakeVol{sizeMb: 1024}
+	proxy.failShare = http.StatusBadRequest
+	if _, err := cs.CreateVolume(ctx, createReq("pvc-2", utils.UNIT_GB)); status.Code(err) != codes.Internal {
+		t.Fatalf("share-only refused: create = %v, want Internal", err)
+	}
+	if _, ok := proxy.pools["pool1"]["pvc-2"]; ok {
+		t.Fatal("share-only refused: dataset left behind")
+	}
+	proxy.failShare = http.StatusInternalServerError
+	proxy.pools["pool1"]["pvc-3"] = &fakeVol{sizeMb: 1024}
+	if _, err := cs.CreateVolume(ctx, createReq("pvc-3", utils.UNIT_GB)); status.Code(err) != codes.Unavailable {
+		t.Fatalf("share-only unknown: create = %v, want Unavailable", err)
 	}
 }

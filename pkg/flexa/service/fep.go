@@ -5,7 +5,7 @@
 package service
 
 import (
-	//"errors"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -104,7 +104,7 @@ func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*model
 		)
 		if err != nil {
 			log.Errorf("Gluesys FlexA Call(CreateVolume) : Fail Create Lustre Volume(%s)", volName)
-			return nil, err
+			return nil, markUnfinished(err, outcomeUnknown(err))
 		}
 		baseDir = resp.Path
 	} else {
@@ -118,7 +118,7 @@ func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*model
 		}
 		if err != nil {
 			log.Errorf("Gluesys FlexA Call(CreateVolume) : Fail Create Volume(%s)", volName)
-			return nil, err
+			return nil, markUnfinished(err, outcomeUnknown(err))
 		}
 
 		baseDir, err = service.createZfsShare(spec)
@@ -131,19 +131,50 @@ func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*model
 			// next CreateVolume finds it without a share path and creates only
 			// the share (provisiond share create is idempotent).
 			if webapi.IsRejected(err) {
-				if rollbackErr := service.fep.ZfsDestroyVolume(volName, poolName); rollbackErr != nil {
-					log.Errorf("Gluesys FlexA Call(CreateVolume) : Fail Rollback Volume(%s): %v",
-						volName, rollbackErr)
-				}
-			} else {
-				log.Warnf("Gluesys FlexA Call(CreateVolume) : share for Volume(%s) failed with an unknown result; "+
-					"keeping the dataset for the next attempt: %v", volName, err)
+				// Final only when the dataset is really gone.
+				return nil, markUnfinished(err, !service.rollbackDataset(volName, poolName))
 			}
-			return nil, err
+			log.Warnf("Gluesys FlexA Call(CreateVolume) : share for Volume(%s) failed with an unknown result; "+
+				"keeping the dataset for the next attempt: %v", volName, err)
+			return nil, markUnfinished(err, true)
 		}
 	}
 
-	return service.volumeResponse(spec, baseDir, refForVip)
+	resp, err := service.volumeResponse(spec, baseDir, refForVip)
+	// The volume is complete on the backend; only its answer is missing.
+	return resp, markUnfinished(err, true)
+}
+
+// ErrCreateUnfinished marks a create that failed with the volume, or part of
+// it, possibly left on the backend: the dataset is kept after an unknown share
+// result, the call timed out or got 5xx, or only the server address lookup
+// failed. The controller reports such failures as Unavailable, so the
+// provisioner keeps retrying even when the PVC is deleted in the meantime; the
+// retry that succeeds hands back a PV, and that PV (whose claim is gone) is
+// deleted with its volume. A final error would make the provisioner forget the
+// claim and leave the volume behind with no PV to delete it.
+var ErrCreateUnfinished = errors.New("the volume may be left on the backend")
+
+func markUnfinished(err error, unfinished bool) error {
+	if err == nil || !unfinished {
+		return err
+	}
+	return fmt.Errorf("%w (%w)", err, ErrCreateUnfinished)
+}
+
+// outcomeUnknown reports a create call whose effect on the backend is not
+// known: no answer (timeout, dropped connection), 5xx, or 409 "already exists"
+// (another create got there first). Any other proxy answer (4xx) means it did
+// not create the volume; provisiond rolls back a failed create itself.
+func outcomeUnknown(err error) bool {
+	if errors.Is(err, webapi.ErrNotSent) {
+		return false
+	}
+	var e *webapi.APIError
+	if !errors.As(err, &e) {
+		return true
+	}
+	return e.Status >= 500 || webapi.IsAlreadyExists(err)
 }
 
 // CreateZfsShare finishes a ZFS volume whose dataset exists but whose NFS share
@@ -159,10 +190,28 @@ func (service *FlexAService) CreateZfsShare(spec *models.CreateVolumeSpec) (*mod
 		// attempt may have finished the share already; take its path.
 		baseDir, err = service.fep.ZfsSharePath(spec.PoolName, spec.VolumeName, webapi.ZfsNfsShareName(spec.VolumeId))
 	}
-	if err != nil {
-		return nil, err
+	if webapi.IsRejected(err) {
+		// The share can never be made with this request: remove the dataset
+		// (nothing uses it without a share) and fail for good. Only a failed
+		// removal leaves it behind.
+		return nil, markUnfinished(err, !service.rollbackDataset(spec.VolumeName, spec.PoolName))
 	}
-	return service.volumeResponse(spec, baseDir, refForVip)
+	if err != nil {
+		// The dataset is there and the share result is unknown.
+		return nil, markUnfinished(err, true)
+	}
+	resp, err := service.volumeResponse(spec, baseDir, refForVip)
+	return resp, markUnfinished(err, true)
+}
+
+// rollbackDataset destroys a dataset whose share was refused. It reports
+// whether the dataset is gone.
+func (service *FlexAService) rollbackDataset(volName, poolName string) bool {
+	if err := service.fep.ZfsDestroyVolume(volName, poolName); err != nil {
+		log.Errorf("Gluesys FlexA Call(CreateVolume) : Fail Rollback Volume(%s): %v", volName, err)
+		return false
+	}
+	return true
 }
 
 func (service *FlexAService) createZfsShare(spec *models.CreateVolumeSpec) (string, error) {

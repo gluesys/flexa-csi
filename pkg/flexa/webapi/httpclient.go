@@ -64,7 +64,7 @@ func (fep *FEP) client() (*http.Client, error) {
 	if fep.CA != "" {
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM([]byte(fep.CA)) {
-			return nil, fmt.Errorf("proxy %s:%d: ca holds no PEM certificate", fep.Ip, fep.Port)
+			return nil, fmt.Errorf("proxy %s:%d: ca holds no PEM certificate (%w)", fep.Ip, fep.Port, ErrNotSent)
 		}
 		cfg.RootCAs = pool
 	}
@@ -83,6 +83,10 @@ func (fep *FEP) send(req *http.Request) (*http.Response, error) {
 	}
 	return c.Do(req)
 }
+
+// ErrNotSent marks a failure before the request left the driver (bad local
+// configuration or arguments): the proxy did nothing.
+var ErrNotSent = errors.New("request not sent")
 
 // APIError is a non-2xx proxy response.
 type APIError struct {
