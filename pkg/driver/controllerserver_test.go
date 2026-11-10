@@ -999,3 +999,68 @@ func TestCreateVolumeRefusedShareIsFinalOnlyWhenDatasetRemoved(t *testing.T) {
 		t.Fatalf("share-only unknown: create = %v, want Unavailable", err)
 	}
 }
+
+// A claim deleted while CreateVolume was still unfinished keeps being retried by
+// external-provisioner. CreateVolume must then finish (with StorageClass options)
+// so the PV is saved and deleted along with the backend volume; any other
+// failure to read the claim stays retryable.
+func TestCreateVolumeFinishesWhenClaimIsGone(t *testing.T) {
+	ctx := context.Background()
+	withClaim := func(req *csi.CreateVolumeRequest) *csi.CreateVolumeRequest {
+		req.Parameters["csi.storage.k8s.io/pvc/name"] = "gone"
+		req.Parameters["csi.storage.k8s.io/pvc/namespace"] = "ns1"
+		return req
+	}
+	for _, lustre := range []bool{false, true} {
+		proxy, info := newFakeProxy(t, "pool1")
+		proxy.provisiond = true
+		cs, _ := newTestController(t, info)
+		req := withClaim(createReq("pvc-1", utils.UNIT_GB))
+		if lustre {
+			req = withClaim(lustreCreateReq("pvc-1", utils.UNIT_GB))
+		}
+		resp, err := cs.CreateVolume(ctx, req)
+		if err != nil || resp.GetVolume().GetVolumeId() == "" {
+			t.Fatalf("lustre=%t: create for a deleted claim = %v, %v; want the volume so it can be deleted", lustre, resp, err)
+		}
+	}
+
+	// The case seen on a device: the first attempt created the volume and failed
+	// after it (Unavailable), then the claim was deleted. The retry must finish.
+	for _, lustre := range []bool{false, true} {
+		proxy, info := newFakeProxy(t, "pool1")
+		proxy.provisiond = true
+		cs, _ := newTestController(t, info)
+		req := withClaim(createReq("pvc-1", utils.UNIT_GB))
+		if lustre {
+			req = withClaim(lustreCreateReq("pvc-1", utils.UNIT_GB))
+		}
+		proxy.failVip = http.StatusNotFound
+		if _, err := cs.CreateVolume(ctx, req); status.Code(err) != codes.Unavailable {
+			t.Fatalf("lustre=%t: first attempt = %v, want Unavailable", lustre, err)
+		}
+		proxy.mu.Lock()
+		proxy.failVip = 0
+		proxy.mu.Unlock()
+		if resp, err := cs.CreateVolume(ctx, req); err != nil || resp.GetVolume().GetVolumeId() == "" {
+			t.Fatalf("lustre=%t: retry after the claim is gone = %v, %v; want the existing volume", lustre, resp, err)
+		}
+	}
+
+	proxy, info := newFakeProxy(t, "pool1")
+	proxy.provisiond = true
+	cs, client := newTestController(t, info)
+	client.PrependReactor("get", "persistentvolumeclaims", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("apiserver unreachable")
+	})
+	_, err := cs.CreateVolume(ctx, withClaim(createReq("pvc-1", utils.UNIT_GB)))
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("claim read failure = %v, want Unavailable", err)
+	}
+	proxy.mu.Lock()
+	_, left := proxy.pools["pool1"]["pvc-1"]
+	proxy.mu.Unlock()
+	if left {
+		t.Fatal("volume created although the claim could not be read")
+	}
+}

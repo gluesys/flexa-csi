@@ -35,6 +35,7 @@ import (
 	"google.golang.org/grpc/status"
 	//"google.golang.org/protobuf/types/known/timestamppb"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/gluesys/flexa-csi/pkg/flexa/common"
@@ -234,10 +235,19 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	var annotations map[string]string
 	if pvcName != "" && pvcNS != "" {
 		pvc, err := cs.Driver.K8sClient.CoreV1().PersistentVolumeClaims(pvcNS).Get(ctx, pvcName, metav1.GetOptions{})
-		if err != nil {
+		switch {
+		case apierrors.IsNotFound(err):
+			// The claim was deleted while an earlier attempt was still unfinished
+			// (Unavailable). external-provisioner keeps calling CreateVolume for it
+			// until it gets a final answer; finishing here with the StorageClass
+			// options lets it save the PV, which is then released and deleted with
+			// the backend volume. Failing would retry forever and leave the volume.
+			log.Warnf("PVC %s/%s is gone; finishing %s with StorageClass options so it can be deleted", pvcNS, pvcName, req.GetName())
+		case err != nil:
 			return nil, status.Errorf(codes.Unavailable, "Failed to get pvc %s/%s: %v", pvcNS, pvcName, err)
+		default:
+			annotations = pvc.Annotations
 		}
-		annotations = pvc.Annotations
 	}
 
 	// 볼륨 옵션: PVC 어노테이션이 있으면 그 값, 없으면 StorageClass 의 같은 이름 파라미터.
