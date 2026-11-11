@@ -78,6 +78,14 @@ func newFakeProxy(t *testing.T, pools ...string) (*fakeProxy, *common.ProxyInfo)
 	return p, &common.ProxyInfo{Host: host, Port: n}
 }
 
+// settle waits until no request is being served. A dropped connection returns
+// to the client before its handler has finished; reading the fake's state
+// without this races with that handler.
+func (p *fakeProxy) settle() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+}
+
 // shareLost makes the fake create the share and then drop the connection, as
 // when the answer is lost after the backend acted.
 const shareLost = -1
@@ -488,6 +496,7 @@ func TestCreateVolumeKeepsDatasetWhenShareResultUnknown(t *testing.T) {
 			if _, err := cs.CreateVolume(ctx, createReq("pvc-1", utils.UNIT_GB)); status.Code(err) != codes.Unavailable {
 				t.Fatalf("provisiond=%t fail=%d: create = %v, want Unavailable", provisiond, fail, err)
 			}
+			proxy.settle()
 			if _, ok := proxy.pools["pool1"]["pvc-1"]; !ok {
 				t.Fatalf("provisiond=%t fail=%d: dataset destroyed on an unknown share result", provisiond, fail)
 			}
