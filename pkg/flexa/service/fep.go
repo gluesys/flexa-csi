@@ -124,15 +124,16 @@ func (service *FlexAService) CreateVolume(spec *models.CreateVolumeSpec) (*model
 		baseDir, err = service.createZfsShare(spec)
 		if err != nil {
 			// Remove the dataset only when the proxy refused the share request
-			// itself: then no share exists and the same request can never make
-			// one. Any other failure (timeout, lost answer, 409, 5xx) leaves the
-			// result unknown: the share may exist and another controller may
-			// already have returned the volume to a pod. Keep the dataset; the
-			// next CreateVolume finds it without a share path and creates only
-			// the share (provisiond share create is idempotent).
-			if webapi.IsRejected(err) {
+			// (400, or a 409 conflict with existing settings): then the same
+			// request can never make the share. Any other failure (timeout, lost
+			// answer, other 409, 5xx) leaves the result unknown: the share may
+			// exist and another controller may already have returned the volume
+			// to a pod. Keep the dataset; the next CreateVolume finds it without a
+			// share path and creates only the share (provisiond share create is
+			// idempotent for the same settings; other settings are a conflict).
+			if refused(err) {
 				// Final only when the dataset is really gone.
-				return nil, markUnfinished(err, !service.rollbackDataset(volName, poolName))
+				return nil, markUnfinished(err, !service.rollbackDataset(spec))
 			}
 			log.Warnf("Gluesys FlexA Call(CreateVolume) : share for Volume(%s) failed with an unknown result; "+
 				"keeping the dataset for the next attempt: %v", volName, err)
@@ -185,16 +186,18 @@ func (service *FlexAService) CreateZfsShare(spec *models.CreateVolumeSpec) (*mod
 		return nil, fmt.Errorf("VIP resolve reference is empty; check client-info host")
 	}
 	baseDir, err := service.createZfsShare(spec)
-	if webapi.IsAlreadyExists(err) {
+	if webapi.IsAlreadyExists(err) && !webapi.IsShareConflict(err) {
 		// The legacy proxy reports no share path in volume info, so an earlier
-		// attempt may have finished the share already; take its path.
+		// attempt may have finished the share already; take its path. Only the
+		// legacy proxy answers this way (provisiond answers a repeated create
+		// with success) and only it serves this lookup.
 		baseDir, err = service.fep.ZfsSharePath(spec.PoolName, spec.VolumeName, webapi.ZfsNfsShareName(spec.VolumeId))
 	}
-	if webapi.IsRejected(err) {
+	if refused(err) {
 		// The share can never be made with this request: remove the dataset
 		// (nothing uses it without a share) and fail for good. Only a failed
 		// removal leaves it behind.
-		return nil, markUnfinished(err, !service.rollbackDataset(spec.VolumeName, spec.PoolName))
+		return nil, markUnfinished(err, !service.rollbackDataset(spec))
 	}
 	if err != nil {
 		// The dataset is there and the share result is unknown.
@@ -204,11 +207,25 @@ func (service *FlexAService) CreateZfsShare(spec *models.CreateVolumeSpec) (*mod
 	return resp, markUnfinished(err, true)
 }
 
-// rollbackDataset destroys a dataset whose share was refused. It reports
-// whether the dataset is gone.
-func (service *FlexAService) rollbackDataset(volName, poolName string) bool {
-	if err := service.fep.ZfsDestroyVolume(volName, poolName); err != nil {
-		log.Errorf("Gluesys FlexA Call(CreateVolume) : Fail Rollback Volume(%s): %v", volName, err)
+// refused reports a share create that cannot succeed when sent again: the
+// proxy rejected the request (400) or it conflicts with settings already on the
+// storage (409, see webapi.IsShareConflict). Neither made the share.
+func refused(err error) bool {
+	return webapi.IsRejected(err) || webapi.IsShareConflict(err)
+}
+
+// rollbackDataset destroys a dataset whose share was refused, with this
+// volume's own share if an earlier attempt made it with other settings (the
+// share name comes from the volume id, so it belongs to no other volume). It
+// reports whether the dataset is gone.
+func (service *FlexAService) rollbackDataset(spec *models.CreateVolumeSpec) bool {
+	share := webapi.ZfsNfsShareName(spec.VolumeId)
+	if err := service.fep.ZfsDeleteShare(spec.VolumeName, share, spec.PoolName); err != nil {
+		log.Errorf("Gluesys FlexA Call(CreateVolume) : Fail Rollback Share(%s) of Volume(%s): %v", share, spec.VolumeName, err)
+		return false
+	}
+	if err := service.fep.ZfsDestroyVolume(spec.VolumeName, spec.PoolName); err != nil {
+		log.Errorf("Gluesys FlexA Call(CreateVolume) : Fail Rollback Volume(%s): %v", spec.VolumeName, err)
 		return false
 	}
 	return true

@@ -154,6 +154,34 @@ func IsRejected(err error) bool {
 	return errors.As(err, &e) && e.Status == http.StatusBadRequest
 }
 
+// shareConflicts are the 409 answers to an NFS share create that conflict
+// with settings already on the storage: provisiond checks them before it acts,
+// so the share was not made, and the same request gets the same answer.
+var shareConflicts = []string{
+	"already exists with different settings",    // provisiond: share, other path or NFS options
+	"already exists with a different network",   // provisiond: secure zone name, other network
+	"already exists with different NFS options", // legacy proxy: share, other NFS options
+	"uses different NFS options",                // provisiond: pool root export, other options
+	"has NFS disabled or no zone",               // provisiond: pool root export without this zone
+	"is not the CSI root export",                // provisiond: pool root share name taken
+	"has OpenStack volumes",                     // provisiond: pool root export on a shared pool
+}
+
+// IsShareConflict reports a share create refused for a conflict with existing
+// settings (see shareConflicts). Retrying cannot make that share.
+func IsShareConflict(err error) bool {
+	var e *APIError
+	if !errors.As(err, &e) || e.Status != http.StatusConflict {
+		return false
+	}
+	for _, m := range shareConflicts {
+		if strings.Contains(e.Msg, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsAlreadyExists reports a 409 "already exists" answer.
 func IsAlreadyExists(err error) bool {
 	var e *APIError

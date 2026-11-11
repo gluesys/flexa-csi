@@ -38,8 +38,13 @@ type fakeProxy struct {
 	pools map[string]map[string]*fakeVol
 	// failShare: 0 creates the share; an HTTP status answers it without
 	// creating; shareLost creates it and then drops the connection.
-	failShare  int
-	provisiond bool
+	failShare int
+	// shareConflict answers a share create with 409 and this msg without
+	// creating it, as for a conflict with settings already on the storage.
+	shareConflict string
+	// shareDeleteRefused answers a share delete with 409 and this msg.
+	shareDeleteRefused string
+	provisiond         bool
 	// poolGone makes every pool answer "does not exist", as the legacy proxy
 	// does while its monitor snapshot misses the pool.
 	poolGone bool
@@ -276,6 +281,11 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(seg) == 6 {
+			if p.provisiond {
+				// provisiond serves no share lookup.
+				reply(w, 404, nil, "Not Found")
+				return
+			}
 			if v.share != seg[5] {
 				reply(w, 409, nil, fmt.Sprintf("%s does not exist", seg[5]))
 				return
@@ -294,6 +304,10 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				reply(w, p.failShare, nil, "share create failed")
 				return
 			}
+			if p.shareConflict != "" {
+				reply(w, 409, nil, p.shareConflict)
+				return
+			}
 			if v.share == seg[5] && !p.provisiond {
 				reply(w, 409, nil, fmt.Sprintf("%s already exists", seg[5]))
 				return
@@ -301,6 +315,10 @@ func (p *fakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			v.share = seg[5]
 			reply(w, 200, map[string]string{"shareName": seg[5]}, "")
 		case "delete":
+			if p.shareDeleteRefused != "" {
+				reply(w, 409, nil, p.shareDeleteRefused)
+				return
+			}
 			if v.share != seg[5] {
 				reply(w, 409, nil, fmt.Sprintf("%s does not exist", seg[5]))
 				return
@@ -1071,5 +1089,98 @@ func TestCreateVolumeFinishesWhenClaimIsGone(t *testing.T) {
 	proxy.mu.Unlock()
 	if left {
 		t.Fatal("volume created although the claim could not be read")
+	}
+}
+
+// A share refused for a conflict with settings already on the storage (409)
+// can never be made by the same request: the create removes the dataset, and
+// this volume's own share when an earlier attempt made it with other settings,
+// and fails for good. provisiond has no share lookup, so these must not be
+// taken for the legacy "already exists" (which would retry forever).
+func TestCreateVolumeShareConflictIsFinal(t *testing.T) {
+	ctx := context.Background()
+	conflicts := []string{
+		"Share(pvc-1) already exists with different settings",
+		"Secure zone(z1) already exists with a different network (10.1.0.0/255.255.0.0)",
+		"pvc-1 already exists with different NFS options",
+		"Root share(r) uses different NFS options {'access': 'RO'}",
+		"Pool(pool1) has OpenStack volumes (cdr-1); CSI exports the whole pool and needs a pool of its own",
+	}
+	for _, provisiond := range []bool{false, true} {
+		for _, msg := range conflicts {
+			for _, ownShare := range []bool{false, true} {
+				for _, shareOnly := range []bool{false, true} {
+					if ownShare && provisiond {
+						// provisiond reports the share path: the volume is complete.
+						continue
+					}
+					name := fmt.Sprintf("provisiond=%t ownShare=%t shareOnly=%t %q", provisiond, ownShare, shareOnly, msg)
+					proxy, info := newFakeProxy(t, "pool1")
+					proxy.provisiond = provisiond
+					cs, _ := newTestController(t, info)
+					proxy.shareConflict = msg
+					if shareOnly || ownShare {
+						// Left by an earlier attempt: the dataset, maybe with a share.
+						v := &fakeVol{sizeMb: 1024}
+						if ownShare {
+							v.share = "pvc-1"
+						}
+						proxy.pools["pool1"]["pvc-1"] = v
+					}
+					if _, err := cs.CreateVolume(ctx, createReq("pvc-1", utils.UNIT_GB)); status.Code(err) != codes.Internal {
+						t.Fatalf("%s: create = %v, want Internal", name, err)
+					}
+					if _, ok := proxy.pools["pool1"]["pvc-1"]; ok {
+						t.Fatalf("%s: dataset left behind", name)
+					}
+					shareDel, dataDel := -1, -1
+					for i, c := range proxy.calls {
+						if strings.HasPrefix(c, "GET /share/") {
+							t.Fatalf("%s: looked up the share path after a conflict: %s", name, c)
+						}
+						if strings.HasPrefix(c, "POST /share/") && strings.HasSuffix(c, "/delete") {
+							shareDel = i
+						}
+						if strings.HasPrefix(c, "POST /zfs/") && strings.HasSuffix(c, "/delete") {
+							dataDel = i
+						}
+					}
+					if shareDel < 0 || dataDel < shareDel {
+						t.Fatalf("%s: rollback must delete the share before the dataset: %v", name, proxy.calls)
+					}
+					// The conflict is gone (the class changed back): the next create works.
+					proxy.shareConflict = ""
+					if _, err := cs.CreateVolume(ctx, createReq("pvc-1", utils.UNIT_GB)); err != nil {
+						t.Fatalf("%s: create after the conflict: %v", name, err)
+					}
+				}
+			}
+		}
+	}
+
+	// A rollback whose share delete is refused (the share is another volume's)
+	// destroys nothing and keeps the create in progress.
+	for _, provisiond := range []bool{false, true} {
+		proxy, info := newFakeProxy(t, "pool1")
+		proxy.provisiond = provisiond
+		cs, _ := newTestController(t, info)
+		proxy.shareConflict = conflicts[0]
+		proxy.shareDeleteRefused = "Share(pvc-1) belongs to a different volume"
+		if _, err := cs.CreateVolume(ctx, createReq("pvc-1", utils.UNIT_GB)); status.Code(err) != codes.Unavailable {
+			t.Fatalf("provisiond=%t share delete refused: create = %v, want Unavailable", provisiond, err)
+		}
+		if _, ok := proxy.pools["pool1"]["pvc-1"]; !ok {
+			t.Fatalf("provisiond=%t share delete refused: dataset destroyed", provisiond)
+		}
+	}
+
+	// A plain "already exists" from the legacy proxy still means the share may
+	// be there: the share-only path takes its path, as before.
+	proxy, info := newFakeProxy(t, "pool1")
+	cs, _ := newTestController(t, info)
+	proxy.pools["pool1"]["pvc-1"] = &fakeVol{sizeMb: 1024, share: "pvc-1"}
+	resp, err := cs.CreateVolume(ctx, createReq("pvc-1", utils.UNIT_GB))
+	if err != nil || resp.GetVolume().GetVolumeContext()["baseDir"] != "/pool1/pvc-1/pvc-1" {
+		t.Fatalf("legacy already exists: %v %v", resp.GetVolume().GetVolumeContext(), err)
 	}
 }
