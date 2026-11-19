@@ -7,6 +7,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	//"github.com/cenkalti/backoff/v4"
@@ -499,56 +500,53 @@ func (service *FlexAService) GetVolume(fs string, poolOrCluster string, volName 
 		return nil, fmt.Errorf("empty poolName for ZFS volume %q", volName)
 	}
 
-	vols, err := service.ListVolumes(poolName)
-	if webapi.IsMissing(err, "Pool("+poolName+")") {
-		// The pool itself is gone, so the volume is too.
+	// Ask for this one volume. Listing the whole pool first only to find the
+	// name grew with the number of volumes: during a 1,000 PVC create every
+	// CreateVolume fetched the full list. Both the legacy proxy and provisiond
+	// answer a missing volume or pool with 409 "... does not exist", and a
+	// volume in another pool with 409 "... belongs to a different pool"; the
+	// list never held either, so both mean "not in this pool".
+	volInfo, err := service.volumeInfo(poolName, volName)
+	if webapi.IsMissing(err, "Volume("+volName+")", "Pool("+poolName+")") || inOtherPool(err) {
 		return nil, nil
 	}
 	if err != nil {
-		log.Errorf("Gluesys FlexA Call(GetVolume) : Fail Volume(%s)", volName)
+		log.Errorf("Gluesys FlexA Call(GetVolume) : Fail Volume(%s): %v", volName, err)
+		return nil, err
+	}
+	vip, err := service.fep.ResolveZfsVip(poolName, refForVip)
+	if err != nil {
+		log.Errorf("Gluesys FlexA Call(GetVolume) : ZFS VIP resolve failed: %v", err)
 		return nil, err
 	}
 
-	for _, vol := range vols {
-		if vol != volName {
-			continue
-		}
-		volInfo, err := service.volumeInfo(poolName, volName)
-		if webapi.IsMissing(err, "Volume("+volName+")") {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		vip, err := service.fep.ResolveZfsVip(poolName, refForVip)
-		if err != nil {
-			log.Errorf("Gluesys FlexA Call(GetVolume) : ZFS VIP resolve failed: %v", err)
-			return nil, err
-		}
-
-		info := &models.K8sVolumeRespSpec{
-			Vip:        vip,
-			VolumeId:   volName,
-			VolumeName: volInfo.VolName,
-			PoolName:   volInfo.PoolName,
-			// ZFS volume_info returns total/used/free in MB. Convert to bytes for CSI.
-			Size:      volInfo.Total * utils.UNIT_MB,
-			Used:      volInfo.Used * utils.UNIT_MB,
-			Free:      volInfo.Free * utils.UNIT_MB,
-			Fs:        "zfs",
-			BaseDir:   volInfo.BaseDir,
-			ShareName: volInfo.ShareName,
-			Creating:  volInfo.Status == "creating",
-			Source:    volInfo.Source,
-		}
-
-		log.Infof("Gluesys FlexA Call(GetVolume) : Success Volume(%s)", volName)
-
-		return info, nil
+	info := &models.K8sVolumeRespSpec{
+		Vip:        vip,
+		VolumeId:   volName,
+		VolumeName: volInfo.VolName,
+		PoolName:   volInfo.PoolName,
+		// ZFS volume_info returns total/used/free in MB. Convert to bytes for CSI.
+		Size:      volInfo.Total * utils.UNIT_MB,
+		Used:      volInfo.Used * utils.UNIT_MB,
+		Free:      volInfo.Free * utils.UNIT_MB,
+		Fs:        "zfs",
+		BaseDir:   volInfo.BaseDir,
+		ShareName: volInfo.ShareName,
+		Creating:  volInfo.Status == "creating",
+		Source:    volInfo.Source,
 	}
 
-	return nil, nil
+	log.Infof("Gluesys FlexA Call(GetVolume) : Success Volume(%s)", volName)
+
+	return info, nil
+}
+
+// inOtherPool reports the 409 both proxies give when the named volume exists
+// in a different pool.
+func inOtherPool(err error) bool {
+	var e *webapi.APIError
+	return errors.As(err, &e) && e.Status == http.StatusConflict &&
+		strings.Contains(e.Msg, "belongs to a different pool")
 }
 
 func (service *FlexAService) ExpandVolume(fs string, poolOrCluster string, volName string, newSizeBytes int64) error {

@@ -1184,3 +1184,26 @@ func TestCreateVolumeShareConflictIsFinal(t *testing.T) {
 		t.Fatalf("legacy already exists: %v %v", resp.GetVolume().GetVolumeContext(), err)
 	}
 }
+
+// The existence check before a ZFS create asks for the one volume; it does not
+// fetch the pool's whole volume list (it grew with every PVC in a bulk create).
+func TestCreateVolumeLooksUpOneVolumeNotTheList(t *testing.T) {
+	proxy, info := newFakeProxy(t, "pool1")
+	cs, _ := newTestController(t, info)
+	ctx := context.Background()
+	for _, provisiond := range []bool{false, true} {
+		proxy.provisiond = provisiond
+		for _, name := range []string{"pvc-a", "pvc-a", "pvc-b"} {
+			if _, err := cs.CreateVolume(ctx, createReq(name, utils.UNIT_GB)); err != nil {
+				t.Fatalf("provisiond=%t create %s: %v", provisiond, name, err)
+			}
+		}
+	}
+	proxy.mu.Lock()
+	defer proxy.mu.Unlock()
+	for _, c := range proxy.calls {
+		if strings.HasSuffix(c, "/volume/list") {
+			t.Fatalf("create fetched the volume list: %v", proxy.calls)
+		}
+	}
+}

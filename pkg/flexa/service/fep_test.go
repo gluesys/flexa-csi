@@ -32,3 +32,21 @@ func TestOutcomeUnknown(t *testing.T) {
 		t.Fatalf("markUnfinished hid the proxy error: %v", err)
 	}
 }
+
+func TestInOtherPool(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{&webapi.APIError{Status: 409, Msg: "Volume(v) belongs to a different pool"}, true},             // provisiond
+		{&webapi.APIError{Status: 409, Msg: "Failed ... The volume belongs to a different pool"}, true}, // legacy proxy
+		{&webapi.APIError{Status: 503, Msg: "belongs to a different pool"}, false},
+		{&webapi.APIError{Status: 409, Msg: "Volume(v) does not exist"}, false},
+		{errors.New("EOF"), false},
+	}
+	for _, tc := range cases {
+		if got := inOtherPool(tc.err); got != tc.want {
+			t.Errorf("inOtherPool(%v) = %t, want %t", tc.err, got, tc.want)
+		}
+	}
+}
